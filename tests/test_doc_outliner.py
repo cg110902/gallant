@@ -86,10 +86,13 @@ def test_validate_beat_contract_pass_and_fail():
     errors = outliner.validate_beat_contract(valid_beat)
     assert len(errors) == 0
 
-    # 1. 目标字数越界
+    # 1. 目标字数越界（合规区间可配置，此处显式收紧以验证边界判定）
+    strict_outliner = DOCOutliner(min_beat_words=400, max_beat_words=1200)
     invalid_words_beat = valid_beat.model_copy(update={"target_words": 200})
-    err1 = outliner.validate_beat_contract(invalid_words_beat)
+    err1 = strict_outliner.validate_beat_contract(invalid_words_beat)
     assert any("字数" in e for e in err1)
+    # 默认区间放宽到 [100, 4000]，与 BeatContract schema 保持一致
+    assert outliner.validate_beat_contract(invalid_words_beat) == []
 
     # 2. 在场角色为空
     no_char_beat = valid_beat.model_copy(update={"characters_present": []})

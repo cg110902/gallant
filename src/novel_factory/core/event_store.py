@@ -5,6 +5,8 @@ Event Store - 基于 SQLite 的工业级不可变事件溯源存储引擎
 
 import json
 import sqlite3
+
+from src.novel_factory.core.db import connect as db_connect
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,8 +49,7 @@ class EventStore:
 
     def __init__(self, db_path: Optional[str] = ":memory:"):
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = db_connect(db_path)
         self._init_schema()
 
     def _init_schema(self):
@@ -97,11 +98,17 @@ class EventStore:
                 ON event_log (entity_id, sequence_num)
             """)
 
-    def append_event(self, event: Event) -> Event:
-        """追加单个不可变事件"""
+    def append_event(self, event: Event, idempotent: bool = False) -> Event:
+        """
+        追加单个不可变事件。
+
+        idempotent=True 时对已存在的 event_id 静默忽略，用于断点续产等
+        会重放同一批初始化事件的场景（例如角色注册）。
+        """
+        verb = "INSERT OR IGNORE INTO" if idempotent else "INSERT INTO"
         with self.conn:
-            cur = self.conn.execute("""
-                INSERT INTO event_log (
+            cur = self.conn.execute(f"""
+                {verb} event_log (
                     event_id, chapter_index, beat_id, timestamp,
                     event_type, entity_id, target_entity_id, payload_json, provenance_text
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)

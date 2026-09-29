@@ -28,6 +28,11 @@ class JudgeEvaluation(BaseModel):
     violations_detected: List[str] = Field(default_factory=list)
     critique: str = ""
     suggested_patch_instructions: List[str] = Field(default_factory=list)
+    verdict_available: bool = Field(
+        default=True,
+        description="裁判是否真的给出了可用裁决。解析失败/服务不可用时为 False，"
+                    "此时 passed 字段无意义，调用方不得据此做出更严厉的判定。"
+    )
 
 
 class LLMJudge:
@@ -130,7 +135,8 @@ class LLMJudge:
                 passed=False,
                 overall_score=0.0,
                 critique=f"裁判模型返回 JSON 解析异常: {e}\n原始返回: {res.text[:200]}",
-                violations_detected=["JUDGE_JSON_PARSE_ERROR"]
+                violations_detected=["JUDGE_JSON_PARSE_ERROR"],
+                verdict_available=False,
             )
 
         # 校验硬规则：如果强制要求后置条件全达成，检查布尔字典

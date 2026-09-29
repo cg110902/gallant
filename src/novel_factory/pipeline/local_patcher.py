@@ -134,13 +134,64 @@ class LocalPatcher:
         original_beat_text: str,
         violation_messages: List[str],
         preceding_context: str,
-        post_condition_reminders: List[str]
+        post_condition_reminders: List[str],
+        persona_block: str = "",
+        time_anchor_line: str = "",
+        target_words: Optional[int] = None,
+        micro_events: Optional[List[str]] = None,
+        camera_angles: Optional[List[str]] = None,
+        present_characters: Optional[List[str]] = None,
+        pacing_type: Optional[str] = None,
+        required_ending: Optional[str] = None
     ) -> str:
         """
-        生成高精度局部重绘 Prompt，强制模型只修改缺陷行，杜绝全篇发散重写
+        生成高精度局部重绘 Prompt，强制模型只修改缺陷行，杜绝全篇发散重写。
+
+        注意：补丁同样是一次生成，必须携带人设声纹与时间锚点约束，
+        否则修补过程本身就会重新引入 OOC 与时序矛盾。
         """
         violations_str = "\n".join([f"- [违规项]: {m}" for m in violation_messages])
         reminders_str = "\n".join([f"- [必须满足]: {r}" for r in post_condition_reminders])
+
+        constraint_parts: List[str] = []
+        # 补丁同样是一次完整生成：若不把微事件、机位与在场名单一并带上，
+        # 修补过程会把初稿【已经达成】的契约合规一起改没，
+        # 于是出现"越修越不合格"的死循环。
+        # 补丁是一次完整再生成，契约信息每漏一项，补丁就可能毁掉初稿的一项合规。
+        # 已经踩过三次同类问题：微事件、在场角色、叙事节奏各丢过一次。
+        if pacing_type:
+            constraint_parts.append(f"【本节拍叙事节奏】{pacing_type}")
+        if pacing_type == "CLIFFHANGER_HOOK":
+            hook_line = (
+                f"，必须兑现的悬念是「{required_ending}」" if required_ending else ""
+            )
+            constraint_parts.append(
+                "【断章要求】本节拍是章末钩子拍，修补后必须仍以强钩子收尾"
+                f"{hook_line}。结尾须为 25 字以内的独立短句或未作答的台词。"
+            )
+        if micro_events:
+            constraint_parts.append(
+                "【必须保留的微事件（修补后仍要全部存在）】\n"
+                + "\n".join(f"- {e}" for e in micro_events)
+            )
+        if camera_angles:
+            constraint_parts.append(
+                "【必须保留的镜头机位】" + "、".join(camera_angles)
+            )
+        if present_characters:
+            constraint_parts.append(
+                "【在场角色（只有这些人可以说话与行动）】"
+                + "、".join(present_characters)
+            )
+        if time_anchor_line:
+            constraint_parts.append(time_anchor_line)
+        if persona_block:
+            constraint_parts.append(persona_block)
+        if target_words:
+            constraint_parts.append(
+                f"【字数契约】修补后的正文必须仍然满足约 {target_words} 字的交付要求。"
+            )
+        constraints_str = ("\n" + "\n".join(constraint_parts) + "\n") if constraint_parts else ""
 
         return f"""【局部微创打补丁任务 - 节拍 {target_beat_id}】
 前序紧邻上下文摘要:
@@ -154,7 +205,7 @@ class LocalPatcher:
 
 【必须强制达成的后置契约】:
 {reminders_str}
-
+{constraints_str}
 【修补准则】:
 1. 保持整体场景动作流程与关键结果绝对不变；
 2. 原位剔除上述违规的说教、套话或逻辑冲突，替换为具体的视听动词或环境细节；

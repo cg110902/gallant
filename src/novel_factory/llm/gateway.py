@@ -59,14 +59,21 @@ class GatewayConfig(BaseModel):
 class ModelGateway:
     """大模型高可用网关"""
 
-    def __init__(self, config: Optional[GatewayConfig] = None):
+    def __init__(
+        self,
+        config: Optional[GatewayConfig] = None,
+        provider: Optional[BaseLLMProvider] = None
+    ):
+        """
+        provider 显式传入时直接包装它（用于给已装配好的 Provider
+        套上重试与熔断），否则按 config 自行组装。
+        """
         self.config = config or GatewayConfig()
         self.circuit_state = CircuitState.CLOSED
         self.consecutive_failures = 0
         self.last_failure_time = 0.0
 
-        # 初始化底层驱动
-        self.provider: BaseLLMProvider = self._build_provider()
+        self.provider: BaseLLMProvider = provider or self._build_provider()
 
     def _build_provider(self) -> BaseLLMProvider:
         """根据配置组装具体 Provider"""

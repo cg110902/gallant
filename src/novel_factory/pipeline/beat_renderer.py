@@ -16,7 +16,11 @@ class BeatRenderer:
         assembled_context: AssembledContext,
         scene_beat: BeatContract,
         dynamic_ban_list: Optional[List[str]] = None,
-        style_notes: Optional[str] = None
+        style_notes: Optional[str] = None,
+        character_names: Optional[Dict[str, str]] = None,
+        governance_directives: Optional[List[str]] = None,
+        persona_block: str = "",
+        time_anchor_line: str = ""
     ) -> Dict[str, str]:
         """
         编译系统 Prompt 与用户任务 Prompt
@@ -43,6 +47,30 @@ class BeatRenderer:
         if dynamic_ban_list:
             prohibitions.append(f"跨章高频疲劳词动态禁令: 严禁出现 {', '.join(dynamic_ban_list[:10])}")
 
+        # 3.5 在场角色名单。
+        #     契约审计会以"幽灵串场"惩罚未在场角色的出现，
+        #     但此前 Prompt 从不声明谁在场——模型根本无从遵守。
+        names = character_names or {}
+        presence_lines = []
+        for cid in scene_beat.characters_present:
+            display = names.get(cid)
+            presence_lines.append(f"- {display}（{cid}）" if display else f"- {cid}")
+        presence_block = (
+            chr(10).join(presence_lines) if presence_lines
+            else "- （本节拍无具名角色，仅环境描写）"
+        )
+
+        # 4. 长程治理指令（伏笔回收/爽点调度/支线续更/人设声纹/时间锚点）
+        gov_parts: List[str] = []
+        if time_anchor_line:
+            gov_parts.append(time_anchor_line)
+        if persona_block:
+            gov_parts.append(persona_block)
+        if governance_directives:
+            gov_parts.append("【本章长程治理强制指令】")
+            gov_parts.extend(f"- {d}" for d in governance_directives)
+        governance_block = ("\n" + "\n".join(gov_parts) + "\n") if gov_parts else ""
+
         system_prompt = f"""你是一名顶级商业小说主笔作家。你必须严格依据给定的分镜契约渲染正文。
 
 【硬性生产准则】:
@@ -60,6 +88,9 @@ class BeatRenderer:
 - 目标字数区间: 约 {scene_beat.target_words} 字
 - 场景氛围: {scene_beat.scene_atmosphere or '默认当前环境'}
 
+【本节拍在场角色（只有这些人可以说话与行动）】:
+{presence_block}
+
 【必须覆盖的镜头机位】:
 {chr(10).join(camera_guides)}
 
@@ -75,6 +106,7 @@ class BeatRenderer:
 【严格禁令事项】:
 {chr(10).join([f'- {p}' for p in prohibitions]) if prohibitions else '- 无特殊禁令'}
 
+{governance_block}
 请直接输出符合上述所有契约的正文段落，不要包含任何前言、开场白或后记。"""
 
         return {

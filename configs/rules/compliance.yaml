@@ -1,0 +1,67 @@
+# 过审风控词库 (Compliance Rule Pack)
+# action 取值: BLOCK (硬红线禁止提交) / REVIEW (人工复核) / SOFTEN (建议弱化)
+# 注意：本词库为工程示例骨架，正式投产前请按目标平台(番茄/起点/七猫)最新审核细则扩充。
+
+categories:
+  - name: "MINOR_SEXUAL_REDLINE"
+    action: "BLOCK"
+    suggestion: "涉未成年人性相关内容为绝对红线，必须整段删除并改写人物年龄设定。"
+    terms:
+      - "萝莉诱惑"
+      - "幼女侍寝"
+      - "未成年新娘"
+
+  - name: "POLITICAL_REDLINE"
+    action: "BLOCK"
+    suggestion: "禁止出现真实国家政权、政党与领导人的影射指代，请替换为架空国名与架空政体。"
+    terms:
+      - "中南海"
+      - "政治局"
+      - "国家主席"
+      - "共产党"
+
+  - name: "EXPLICIT_SEXUAL"
+    action: "REVIEW"
+    suggestion: "露骨性描写请改为场景切换或留白处理（关灯法），保留张力去除细节。"
+    terms:
+      - "赤裸的身体紧贴"
+      - "喘息着骑了上去"
+      - "下体"
+
+  - name: "GRAPHIC_VIOLENCE"
+    action: "SOFTEN"
+    suggestion: "血腥细节建议降级：以声音、旁观者反应与结果替代器官层面的直接描写。"
+    terms:
+      - "肠子流了一地"
+      - "脑浆迸裂"
+      - "剜出眼球"
+
+  - name: "DRUG_CRIME_GUIDE"
+    action: "BLOCK"
+    suggestion: "禁止出现毒品制作、枪支改装等可操作性犯罪教程，必须模糊化处理。"
+    terms:
+      - "制毒配方"
+      - "冰毒提纯"
+      - "枪支改装图纸"
+
+  - name: "GAMBLING_PROMOTION"
+    action: "REVIEW"
+    suggestion: "赌博情节需体现负面后果，避免渲染一夜暴富的诱导性描写。"
+    terms:
+      - "网络赌场"
+      - "境外博彩"
+
+  - name: "REAL_BRAND_LEGAL_RISK"
+    action: "SOFTEN"
+    suggestion: "真实企业/品牌名存在法务风险，建议替换为架空品牌。"
+    terms:
+      - "腾讯"
+      - "阿里巴巴"
+      - "华为"
+
+  - name: "SUICIDE_SELF_HARM"
+    action: "REVIEW"
+    suggestion: "自杀自残的具体方法描写需删除，仅保留情绪层面的表达。"
+    terms:
+      - "割腕的正确方法"
+      - "烧炭自杀"

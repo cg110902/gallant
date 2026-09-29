@@ -10,6 +10,7 @@ from pathlib import Path
 import tempfile
 import yaml
 
+from src.novel_factory.qc.contract_auditor import BeatContractAuditor
 from src.novel_factory.orchestrator import NovelFactoryOrchestrator
 from src.novel_factory.graph.invariant_checker import ProposedAction
 from src.novel_factory.schemas.beat import BeatContract, CameraAngle, PacingType
@@ -137,6 +138,10 @@ def test_orchestrator_anti_drooling_stream_breaker():
         )
 
     orchestrator = NovelFactoryOrchestrator(llm_worker=drooling_writer)
+    # 本用例聚焦机械质检闭环，显式关闭契约交付闸门以隔离被测关注点
+    orchestrator.contract_auditor = BeatContractAuditor(
+        enforce_word_count=False, enforce_camera_coverage=False, enforce_micro_events=False
+    )
 
     beat = BeatContract(
         beat_id="ch01_b01",

@@ -5,6 +5,8 @@ Bi-temporal Entity-Causal Graph (BEC-Graph) - 双时态实体因果图谱引擎
 
 import json
 import sqlite3
+
+from src.novel_factory.core.db import connect as db_connect
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -18,13 +20,17 @@ class CausalViolationError(Exception):
     pass
 
 
+class UnknownEntityError(Exception):
+    """对未注册实体执行状态变更"""
+    pass
+
+
 class BECGraph:
     """双时态实体因果图谱管理器 (SQLite 实现)"""
 
     def __init__(self, db_path: Optional[str] = ":memory:"):
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = db_connect(db_path)
         self._init_tables()
 
     def _init_tables(self):
@@ -121,7 +127,22 @@ class BECGraph:
         new_payload: Dict[str, Any],
         is_alive: Optional[bool] = None
     ) -> None:
-        """记录实体在特定章节的状态突变"""
+        """
+        记录实体在特定章节的状态突变。
+
+        实体必须已注册：为未注册实体写成长历史会产生无主的孤儿数据，
+        而且正是"幽灵角色"绕过一致性检查的入口。此处直接拒绝并给出可操作提示。
+        """
+        exists = self.conn.execute(
+            "SELECT 1 FROM entities WHERE entity_id = ?", (entity_id,)
+        ).fetchone()
+        if not exists:
+            raise UnknownEntityError(
+                f"实体 [{entity_id}] 尚未在 BEC 图谱中注册，无法记录其状态变更。"
+                f"请先调用 orchestrator.register_entity() 注册该实体"
+                f"（它会同时写入图谱与事件溯源库）。"
+            )
+
         payload_str = json.dumps(new_payload, ensure_ascii=False)
         with self.conn:
             # 插入历史表
@@ -194,6 +215,33 @@ class BECGraph:
         if row:
             return json.loads(row["payload_json"])
         return None
+
+    def list_entities(
+        self,
+        entity_type: Optional[str] = None,
+        alive_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """列出图谱中已注册的全部实体（用于在场纪律检查与重名冲突扫描）"""
+        sql = "SELECT entity_id, entity_type, name, is_alive, created_chapter FROM entities"
+        conds, params = [], []
+        if entity_type:
+            conds.append("entity_type = ?")
+            params.append(entity_type)
+        if alive_only:
+            conds.append("is_alive = 1")
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        rows = self.conn.execute(sql, params).fetchall()
+        return [
+            {
+                "entity_id": r[0],
+                "entity_type": r[1],
+                "name": r[2],
+                "is_alive": bool(r[3]),
+                "created_chapter": r[4],
+            }
+            for r in rows
+        ]
 
     def get_active_relations_at(
         self,

@@ -28,7 +28,15 @@ class ContractValidationError(Exception):
 class DOCOutliner:
     """DOC 细粒度大纲规划与契约控制器"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        min_beat_words: int = 100,
+        max_beat_words: int = 4000
+    ):
+        # 字数合规区间必须与 BeatContract schema 及 pacing 配置保持一致，
+        # 早期硬编码的 [400, 1200] 会把合法的长节拍误判为违规。
+        self.min_beat_words = min_beat_words
+        self.max_beat_words = max_beat_words
         self.master_arc: Optional[MasterArcOutline] = None
         self.volumes: Dict[int, VolumeOutline] = {}
         self.chapters: Dict[int, ChapterOutline] = {}
@@ -56,7 +64,16 @@ class DOCOutliner:
         characters: Optional[List[str]] = None
     ) -> List[BeatContract]:
         """
-        标准四联节拍雪花分解器 (Snowflake 4-Beat Decomposition)：
+        标准四联节拍雪花分解器 (Snowflake 4-Beat Decomposition)。
+
+        注意：本方法产出的是【结构模板】，其中的微事件是抽象的节奏描述
+        （如"展示当前困境与外部强敌迫近的声势"），而不是导演授权的具体剧情事件。
+        系统自己的规范明确要求微事件必须是可检出的物理事件，
+        因此这些模板事件一律标记 must_accomplish=False —— 它们是给作者的写作提示，
+        不能作为硬性交付契约去卡审计，否则等于用自己都不合规的占位内容否决产出。
+        真正的必达事件应由 DOC 导演或大纲注入。
+
+        原分解逻辑：
         若章节尚未手动切分分镜，自动生成符合网文爽感心流的 4 级节拍：
         1. BUILD_UP (铺垫/压制)
         2. COGNITIVE_GAP (认知差拉大)
@@ -79,7 +96,7 @@ class DOCOutliner:
                 location_id=loc,
                 scene_atmosphere="山雨欲来，压抑阴沉",
                 micro_events=[
-                    MicroEvent(event_id="e1", description="展示当前困境与外部强敌迫近的声势")
+                    MicroEvent(event_id="e1", description="展示当前困境与外部强敌迫近的声势", must_accomplish=False)
                 ]
             ),
             BeatContract(
@@ -93,8 +110,8 @@ class DOCOutliner:
                 location_id=loc,
                 scene_atmosphere="剑拔弩张，冷嘲热讽",
                 micro_events=[
-                    MicroEvent(event_id="e2", description="反派误判主角底牌，言语狂妄自大"),
-                    MicroEvent(event_id="e3", description="主角暗中调动底牌，蓄势待发")
+                    MicroEvent(event_id="e2", description="反派误判主角底牌，言语狂妄自大", must_accomplish=False),
+                    MicroEvent(event_id="e3", description="主角暗中调动底牌，蓄势待发", must_accomplish=False)
                 ]
             ),
             BeatContract(
@@ -108,8 +125,8 @@ class DOCOutliner:
                 location_id=loc,
                 scene_atmosphere="气浪轰鸣，雷霆万钧",
                 micro_events=[
-                    MicroEvent(event_id="e4", description="雷霆出手一招破局，逆转碾压"),
-                    MicroEvent(event_id="e5", description="围观者瞠目结舌，全场陷入死寂")
+                    MicroEvent(event_id="e4", description="雷霆出手一招破局，逆转碾压", must_accomplish=False),
+                    MicroEvent(event_id="e5", description="围观者瞠目结舌，全场陷入死寂", must_accomplish=False)
                 ]
             ),
             BeatContract(
@@ -123,7 +140,7 @@ class DOCOutliner:
                 location_id=loc,
                 scene_atmosphere="暗流涌动，悬念未决",
                 micro_events=[
-                    MicroEvent(event_id="e6", description="战后清点或发现更深层的诡异暗号/神秘来客")
+                    MicroEvent(event_id="e6", description="战后清点或发现更深层的诡异暗号/神秘来客", must_accomplish=False)
                 ]
             )
         ]
@@ -150,8 +167,11 @@ class DOCOutliner:
         errors = []
 
         # 1. 字数区间
-        if beat.target_words < 400 or beat.target_words > 1200:
-            errors.append(f"节拍 [{beat.beat_id}] 目标字数 {beat.target_words} 超出工业合规区间 [400, 1200]")
+        if not (self.min_beat_words <= beat.target_words <= self.max_beat_words):
+            errors.append(
+                f"节拍 [{beat.beat_id}] 目标字数 {beat.target_words} 超出合规区间 "
+                f"[{self.min_beat_words}, {self.max_beat_words}]"
+            )
 
         # 2. 在场角色合法性
         if not beat.characters_present:
@@ -201,10 +221,12 @@ class DOCOutliner:
 
     def to_dict(self) -> Dict[str, Any]:
         """全案大纲序列化导出"""
+        # mode="json" 才能把枚举与嵌套模型降为原生标量，
+        # 否则 YAML 序列化会直接抛 RepresenterError。
         return {
-            "master_arc": self.master_arc.model_dump() if self.master_arc else None,
-            "volumes": {k: v.model_dump() for k, v in self.volumes.items()},
-            "chapters": {k: v.model_dump() for k, v in self.chapters.items()}
+            "master_arc": self.master_arc.model_dump(mode="json") if self.master_arc else None,
+            "volumes": {k: v.model_dump(mode="json") for k, v in self.volumes.items()},
+            "chapters": {k: v.model_dump(mode="json") for k, v in self.chapters.items()}
         }
 
     @classmethod

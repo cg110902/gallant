@@ -92,7 +92,7 @@ class CostAuditor:
         full_price_cost = (input_tokens / 1_000_000.0) * pricing.price_per_1m_input + cost_output
         saved_cny = max(0.0, full_price_cost - actual_cost)
 
-        return round(actual_cost, 5), round(saved_cny, 5)
+        return round(actual_cost, 8), round(saved_cny, 8)
 
     def pre_check_budget(
         self,
@@ -155,11 +155,21 @@ class CostAuditor:
         self.records.append(rec)
         self._chapter_records[chapter_index].append(rec)
 
-        # 检查是否即时超标
+        # 检查是否即时超标（单章）
         ch_summary = self.audit_chapter(chapter_index)
         if ch_summary.is_budget_exceeded:
             raise FinancialCircuitBreakerError(
                 f"第 {chapter_index} 章累计消耗 ¥{ch_summary.total_cost_cny:.4f} 击穿硬断路器阈值 ¥{self.max_cost_per_chapter:.2f}！"
+            )
+
+        # 全书总预算硬熔断。
+        # 此前只有 pre_check_budget 检查总预算，而真实入账走的是本方法，
+        # 于是全书限额形同虚设——实测限额 ¥0.01 仍能一路花到 ¥156。
+        total_spent = sum(r.calculated_cost_cny for r in self.records)
+        if total_spent > self.max_total_budget:
+            raise FinancialCircuitBreakerError(
+                f"全书财务总预算熔断：累计已消耗 ¥{total_spent:.4f}，"
+                f"超出总投资限额 ¥{self.max_total_budget:.2f}，已停止继续消耗！"
             )
 
         return rec
@@ -183,7 +193,7 @@ class CostAuditor:
 
         alert = FinancialAlertLevel.NORMAL
         if tot_cost >= self.max_cost_per_chapter:
-            alert = FinancialCircuitBreakerLevel = FinancialAlertLevel.CIRCUIT_TRIPPED
+            alert = FinancialAlertLevel.CIRCUIT_TRIPPED
         elif tot_cost >= self.max_cost_per_chapter * self.soft_warning_ratio:
             alert = FinancialAlertLevel.WARNING
 
@@ -192,9 +202,9 @@ class CostAuditor:
             total_input_tokens=tot_in,
             total_cached_tokens=tot_cached,
             total_output_tokens=tot_out,
-            total_cost_cny=round(tot_cost, 4),
+            total_cost_cny=round(tot_cost, 6),
             cache_hit_rate=round(hit_rate, 4),
-            cny_saved_by_caching=round(saved_cny, 4),
+            cny_saved_by_caching=round(saved_cny, 6),
             is_budget_exceeded=(tot_cost > self.max_cost_per_chapter),
             alert_level=alert
         )
@@ -217,8 +227,8 @@ class CostAuditor:
 
         return BookCostSummary(
             total_chapters_recorded=chapters,
-            total_cost_cny=round(tot_cost, 2),
-            avg_cost_per_chapter=round(avg_cost, 4),
+            total_cost_cny=round(tot_cost, 4),
+            avg_cost_per_chapter=round(avg_cost, 6),
             total_tokens_consumed=tot_tokens,
             total_cny_saved_by_caching=round(tot_saved, 2)
         )
