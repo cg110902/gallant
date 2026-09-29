@@ -4,7 +4,7 @@ Cost Tracker - Token 经济学与商业毛利核算引擎
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass

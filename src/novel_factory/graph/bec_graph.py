@@ -195,6 +195,33 @@ class BECGraph:
             return json.loads(row["payload_json"])
         return None
 
+    def list_entities(
+        self,
+        entity_type: Optional[str] = None,
+        alive_only: bool = False
+    ) -> List[Dict[str, Any]]:
+        """列出图谱中已注册的全部实体（用于在场纪律检查与重名冲突扫描）"""
+        sql = "SELECT entity_id, entity_type, name, is_alive, created_chapter FROM entities"
+        conds, params = [], []
+        if entity_type:
+            conds.append("entity_type = ?")
+            params.append(entity_type)
+        if alive_only:
+            conds.append("is_alive = 1")
+        if conds:
+            sql += " WHERE " + " AND ".join(conds)
+        rows = self.conn.execute(sql, params).fetchall()
+        return [
+            {
+                "entity_id": r[0],
+                "entity_type": r[1],
+                "name": r[2],
+                "is_alive": bool(r[3]),
+                "created_chapter": r[4],
+            }
+            for r in rows
+        ]
+
     def get_active_relations_at(
         self,
         source_id: Optional[str] = None,

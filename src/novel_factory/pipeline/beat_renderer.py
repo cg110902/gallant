@@ -16,7 +16,10 @@ class BeatRenderer:
         assembled_context: AssembledContext,
         scene_beat: BeatContract,
         dynamic_ban_list: Optional[List[str]] = None,
-        style_notes: Optional[str] = None
+        style_notes: Optional[str] = None,
+        governance_directives: Optional[List[str]] = None,
+        persona_block: str = "",
+        time_anchor_line: str = ""
     ) -> Dict[str, str]:
         """
         编译系统 Prompt 与用户任务 Prompt
@@ -42,6 +45,17 @@ class BeatRenderer:
         prohibitions = list(scene_beat.strict_prohibitions)
         if dynamic_ban_list:
             prohibitions.append(f"跨章高频疲劳词动态禁令: 严禁出现 {', '.join(dynamic_ban_list[:10])}")
+
+        # 4. 长程治理指令（伏笔回收/爽点调度/支线续更/人设声纹/时间锚点）
+        gov_parts: List[str] = []
+        if time_anchor_line:
+            gov_parts.append(time_anchor_line)
+        if persona_block:
+            gov_parts.append(persona_block)
+        if governance_directives:
+            gov_parts.append("【本章长程治理强制指令】")
+            gov_parts.extend(f"- {d}" for d in governance_directives)
+        governance_block = ("\n" + "\n".join(gov_parts) + "\n") if gov_parts else ""
 
         system_prompt = f"""你是一名顶级商业小说主笔作家。你必须严格依据给定的分镜契约渲染正文。
 
@@ -75,6 +89,7 @@ class BeatRenderer:
 【严格禁令事项】:
 {chr(10).join([f'- {p}' for p in prohibitions]) if prohibitions else '- 无特殊禁令'}
 
+{governance_block}
 请直接输出符合上述所有契约的正文段落，不要包含任何前言、开场白或后记。"""
 
         return {

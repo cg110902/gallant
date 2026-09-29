@@ -1,0 +1,76 @@
+# 经典三幕剧节奏模型 (Classic Three-Act Structure)
+# 适用于：实体出版向、悬疑推理、严肃文学向长篇
+# 与 webnovel_high_octane 的区别：允许更长的铺垫期与更低的爽点密度
+
+pacing_name: "经典三幕剧结构"
+pacing_id: "CLASSIC_THREE_ACT"
+description: "以建置-对抗-解决为骨架的传统戏剧结构，重人物弧光与主题表达，容忍慢热开篇。"
+
+# 全书三幕分界（按总章数百分比）
+acts:
+  - act_index: 1
+    name: "第一幕 · 建置 (Setup)"
+    start_ratio: 0.0
+    end_ratio: 0.25
+    goal: "确立主角的日常世界、核心欲望与致命缺陷，以激励事件打破平衡"
+    key_beats:
+      - "开场意象 (Opening Image)"
+      - "主题呈现 (Theme Stated)"
+      - "激励事件 (Inciting Incident)"
+      - "第一幕转折点 (Plot Point I)"
+
+  - act_index: 2
+    name: "第二幕 · 对抗 (Confrontation)"
+    start_ratio: 0.25
+    end_ratio: 0.75
+    goal: "主角在持续升级的阻力中反复受挫，于中点发生认知翻转，最终跌入至暗时刻"
+    key_beats:
+      - "情节副线展开 (B-Story)"
+      - "中点翻转 (Midpoint)"
+      - "反派逼近 (Bad Guys Close In)"
+      - "一无所有 (All Is Lost)"
+      - "灵魂暗夜 (Dark Night of the Soul)"
+
+  - act_index: 3
+    name: "第三幕 · 解决 (Resolution)"
+    start_ratio: 0.75
+    end_ratio: 1.0
+    goal: "主角带着成长后的新认知发起最终对决，完成弧光并回应主题"
+    key_beats:
+      - "第三幕转折点 (Plot Point II)"
+      - "最终对决 (Climax)"
+      - "收束意象 (Final Image)"
+
+# 章节级节拍配比（三幕剧允许更多铺垫与过渡）
+beat_distribution:
+  BUILD_UP: 0.40
+  COGNITIVE_GAP: 0.25
+  CATHARSIS_PAYOFF: 0.20
+  CLIFFHANGER_HOOK: 0.15
+
+# 爽点密度约束（显著宽于网文高燃模型）
+payoff_density:
+  max_suppression_streak: 10          # 允许连续十章压抑铺垫
+  max_chapters_without_payoff: 15
+  max_payoff_streak: 3
+  rolling_window: 15
+  min_rolling_score: -14.0
+
+# 章末钩子要求（不强制每章留钩，允许章节自然收束）
+hook_policy:
+  min_acceptable_score: 3.0
+  weak_streak_alert_threshold: 6
+  require_hook_every_chapter: false
+
+# 升级/成长节奏（非爽文，成长应缓慢且有代价）
+progression:
+  max_growth_ratio_per_chapter: 0.12
+  max_growth_ratio_per_10_chapters: 1.6
+  min_chapters_per_tier: 30
+  target_curve_shape: "LOGARITHMIC"
+
+# 单章规格
+chapter_spec:
+  target_words_min: 2500
+  target_words_max: 4500
+  beats_per_chapter: 3

@@ -19,7 +19,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Callable, Dict, Generator, List, Optional, Type, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Type, Union
 from pydantic import BaseModel, Field
 
 from src.novel_factory.llm.client import BaseLLMProvider, LLMGenerationResult

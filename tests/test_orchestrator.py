@@ -2,6 +2,7 @@
 Tests for Novel Factory Orchestrator - 状态机编排与端到端质检修补闭环测试
 """
 
+from src.novel_factory.qc.contract_auditor import BeatContractAuditor
 from src.novel_factory.orchestrator import NovelFactoryOrchestrator
 from src.novel_factory.schemas.beat import BeatContract, CameraAngle, PacingType
 from src.novel_factory.schemas.commit import StateDelta
@@ -30,6 +31,10 @@ def test_orchestrator_auto_patch_on_lint_failure():
             )
 
     orchestrator = NovelFactoryOrchestrator(llm_worker=flaky_writer)
+    # 本用例聚焦机械质检闭环，显式关闭契约交付闸门以隔离被测关注点
+    orchestrator.contract_auditor = BeatContractAuditor(
+        enforce_word_count=False, enforce_camera_coverage=False, enforce_micro_events=False
+    )
 
     beat = BeatContract(
         beat_id="ch01_beat01",

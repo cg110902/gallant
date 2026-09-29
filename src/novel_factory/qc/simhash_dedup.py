@@ -100,8 +100,22 @@ class CrossChapterDedupIndex:
         self,
         deduplicator: Optional[SimHashDeduplicator] = None,
         chapter_dup_distance_threshold: int = 18,  # 64 位哈希中 <= 18 判定为结构雷同
-        beat_dup_distance_threshold: int = 14
+        beat_dup_distance_threshold: int = 14,
+        min_reliable_length: int = 500,   # 短文本特征过少，SimHash 结论不可靠
+        adaptive_baseline: bool = True,   # 以本书自身的相似度分布为基线
+        baseline_margin: float = 0.06,    # 超出基线多少才算异常
+        absolute_floor: float = 0.85,     # 无论基线多高，低于此值一律不报
+        min_samples_for_baseline: int = 8,
+        warmup_similarity: float = 0.97   # 基线未建立前，只拦近乎逐字复制
     ):
+        self.min_reliable_length = min_reliable_length
+        self.adaptive_baseline = adaptive_baseline
+        self.baseline_margin = baseline_margin
+        self.absolute_floor = absolute_floor
+        self.min_samples_for_baseline = min_samples_for_baseline
+        self.warmup_similarity = warmup_similarity
+        # 本书章节两两相似度样本，用于推导"正常相似度"基线
+        self._similarity_samples: List[float] = []
         self.simhash = deduplicator or SimHashDeduplicator()
         self.chapter_threshold = chapter_dup_distance_threshold
         self.beat_threshold = beat_dup_distance_threshold
@@ -132,26 +146,72 @@ class CrossChapterDedupIndex:
         """
         跨章相似度排查：防止近 N 章内发生结构性或文本雷同
         """
+        # 64 位 SimHash 在极短文本上特征稀疏，任意两段同题材短文都会"高度相似"，
+        # 直接拿来否决章节会制造大量误报，故设可靠长度下限。
+        if len(text) < self.min_reliable_length:
+            return []
+
         cur_hash = self.simhash.compute_simhash(text)
         incidents = []
 
         min_ch = max(1, current_chapter - lookback_chapters)
+        comparisons: List[Tuple[int, int, float]] = []
         for prev_ch, prev_hash in self._chapter_hashes.items():
             if prev_ch >= current_chapter or prev_ch < min_ch:
                 continue
-
             dist = self.simhash.hamming_distance(cur_hash, prev_hash)
-            if dist <= self.chapter_threshold:
-                sim = self.simhash.similarity(cur_hash, prev_hash)
+            comparisons.append((prev_ch, dist, self.simhash.similarity(cur_hash, prev_hash)))
+
+        if not comparisons:
+            return []
+
+        # 同一本书的章节天然共享人物、场景与文风，基线相似度本就很高。
+        # 用固定绝对阈值会把"正常的同书章节"全部误判为抄袭，
+        # 因此以本书自身的相似度分布为基线，只标记显著偏离的离群章节。
+        effective_threshold = self._effective_similarity_threshold()
+
+        for prev_ch, dist, sim in comparisons:
+            self._similarity_samples.append(sim)
+            if sim >= effective_threshold:
                 incidents.append(DuplicateIncident(
                     target_chapter=current_chapter,
                     matched_chapter=prev_ch,
                     hamming_distance=dist,
                     similarity=sim,
-                    description=f"第 {current_chapter} 章与第 {prev_ch} 章语义指纹高度重合 (汉明距离 {dist} <= {self.chapter_threshold})"
+                    description=(
+                        f"第 {current_chapter} 章与第 {prev_ch} 章语义指纹高度重合 "
+                        f"(相似度 {sim:.1%} >= 判定线 {effective_threshold:.1%}, 汉明距离 {dist})"
+                    )
                 ))
 
         return incidents
+
+    def _effective_similarity_threshold(self) -> float:
+        """
+        推导本次判定使用的相似度阈值。
+
+        - 关闭自适应时：退化为固定汉明距离阈值换算出的相似度；
+        - 开启自适应时：取 max(绝对下限, 本书相似度中位数 + 容差)，
+          既不会把正常的同书章节误杀，也能抓住真正的近似复制。
+        """
+        fixed = 1.0 - (self.chapter_threshold / 64.0)
+        if not self.adaptive_baseline:
+            return fixed
+        if len(self._similarity_samples) < self.min_samples_for_baseline:
+            # 样本不足时无法判断什么叫"异常相似"，此时只拦近乎逐字的复制，
+            # 宁可漏报也不在预热期制造大批误报。
+            return self.warmup_similarity
+
+        ordered = sorted(self._similarity_samples)
+        median = ordered[len(ordered) // 2]
+        return max(self.absolute_floor, median + self.baseline_margin)
+
+    def current_baseline(self) -> Optional[float]:
+        """当前已观测到的本书相似度中位数（用于巡检与调参）"""
+        if not self._similarity_samples:
+            return None
+        ordered = sorted(self._similarity_samples)
+        return ordered[len(ordered) // 2]
 
     def check_beat_duplicate(
         self,
@@ -161,6 +221,11 @@ class CrossChapterDedupIndex:
         lookback_chapters: int = 5
     ) -> List[DuplicateIncident]:
         """分镜级去重检查：防止近 5 章内反复出现相同的过场描写或战斗走位"""
+        # 64 位 SimHash 在极短文本上特征稀疏，任意两段同题材短文都会"高度相似"，
+        # 直接拿来否决章节会制造大量误报，故设可靠长度下限。
+        if len(text) < self.min_reliable_length:
+            return []
+
         cur_hash = self.simhash.compute_simhash(text)
         incidents = []
 

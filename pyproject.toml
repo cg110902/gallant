@@ -16,7 +16,7 @@ dependencies = [
     "rich>=13.0.0",
     "rapidfuzz>=3.0.0",
     "httpx>=0.27.0",
-    "google-genai>=2.3.0"
+    "google-genai>=0.3.0"
 ]
 
 [project.optional-dependencies]
@@ -26,10 +26,13 @@ dev = [
 ]
 
 [project.scripts]
-novel-factory = "src.novel_factory.cli.__main__:main"
+novel-factory = "src.novel_factory.cli.main:main"
 
+# 全代码库统一使用 `src.novel_factory.*` 绝对导入，因此必须以仓库根为包根，
+# 否则安装后导入路径与源码不一致，装完即崩。
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["src*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

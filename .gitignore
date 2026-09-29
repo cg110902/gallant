@@ -53,3 +53,12 @@ coverage.xml
 .idea/
 *.swp
 *.swo
+
+# Novel Factory 生产产物与本地状态（不应进入版本库）
+*.db
+*.db-journal
+.production_journal.json
+.hitl_state.json
+exports/
+dist_manuscripts/
+.stress/

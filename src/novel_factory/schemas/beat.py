@@ -34,7 +34,11 @@ class BeatContract(BaseModel):
     beat_id: str = Field(description="全局节拍ID，如 ch01_beat02")
     chapter_index: int
     beat_index: int = Field(description="当前章内部节拍序号 (1~4)")
-    target_words: int = Field(default=700, ge=400, le=1200, description="目标字数区间")
+    target_words: int = Field(default=700, ge=100, le=4000, description="目标字数区间")
+    word_tolerance_ratio: float = Field(
+        default=0.25, ge=0.0, le=1.0,
+        description="字数契约允许的上下浮动比例，超出即判定交付违约"
+    )
     pacing_type: PacingType
     
     # 视听与镜头机位约束

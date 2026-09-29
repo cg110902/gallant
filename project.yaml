@@ -21,8 +21,34 @@ qc_pipeline:
     - "configs/rules/anti_slop.yaml"
     - "configs/rules/formatting.yaml"
   repetition_rules: "configs/rules/repetition.yaml"
+  compliance_pack: "configs/rules/compliance.yaml"   # 过审风控词库
   auto_patch_on_failure: true
   max_local_patch_retries: 3
+
+# 3.5 节拍契约交付审计（字数 SLA / 微事件 / 机位 / 在场纪律）
+contract_audit:
+  enforce_word_count: true
+  enforce_micro_events: true
+  enforce_camera_coverage: true
+  min_camera_coverage_ratio: 0.5
+  micro_event_high_confidence: 0.6      # 高于此视为已推进
+  micro_event_low_confidence: 0.3       # 低于此判致命违约，中间地带交语义裁判
+
+# 3.6 长程治理闸门（伏笔超期 / 时间线矛盾 / 人设崩坏 / 章末钩子失效）
+governance:
+  enforce: true                          # 治理问题是否否决整章
+  strict_unregistered_entities: true     # 未注册角色出场即违规（防绕过不变量）
+  max_simhash_incidents_per_chapter: 0   # 跨章雷同容忍上限
+  foreshadow_due_soon_window: 10         # 距回收截止多少章开始催收
+  hook_min_acceptable_score: 5.0         # 章末钩子合格线
+
+# 3.7 断点续产运行时
+runtime:
+  journal_path: ".production_journal.json"
+  max_attempts_per_chapter: 3
+  retry_backoff_seconds: 2.0
+  suspend_on_qc_failure: false           # 质检驳回是否挂起等待人工
+  stop_on_financial_breaker: true
 
 # 4. 模型路由与 Prompt 缓存策略
 models:

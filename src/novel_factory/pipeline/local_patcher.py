@@ -134,13 +134,30 @@ class LocalPatcher:
         original_beat_text: str,
         violation_messages: List[str],
         preceding_context: str,
-        post_condition_reminders: List[str]
+        post_condition_reminders: List[str],
+        persona_block: str = "",
+        time_anchor_line: str = "",
+        target_words: Optional[int] = None
     ) -> str:
         """
-        生成高精度局部重绘 Prompt，强制模型只修改缺陷行，杜绝全篇发散重写
+        生成高精度局部重绘 Prompt，强制模型只修改缺陷行，杜绝全篇发散重写。
+
+        注意：补丁同样是一次生成，必须携带人设声纹与时间锚点约束，
+        否则修补过程本身就会重新引入 OOC 与时序矛盾。
         """
         violations_str = "\n".join([f"- [违规项]: {m}" for m in violation_messages])
         reminders_str = "\n".join([f"- [必须满足]: {r}" for r in post_condition_reminders])
+
+        constraint_parts: List[str] = []
+        if time_anchor_line:
+            constraint_parts.append(time_anchor_line)
+        if persona_block:
+            constraint_parts.append(persona_block)
+        if target_words:
+            constraint_parts.append(
+                f"【字数契约】修补后的正文必须仍然满足约 {target_words} 字的交付要求。"
+            )
+        constraints_str = ("\n" + "\n".join(constraint_parts) + "\n") if constraint_parts else ""
 
         return f"""【局部微创打补丁任务 - 节拍 {target_beat_id}】
 前序紧邻上下文摘要:
@@ -154,7 +171,7 @@ class LocalPatcher:
 
 【必须强制达成的后置契约】:
 {reminders_str}
-
+{constraints_str}
 【修补准则】:
 1. 保持整体场景动作流程与关键结果绝对不变；
 2. 原位剔除上述违规的说教、套话或逻辑冲突，替换为具体的视听动词或环境细节；
