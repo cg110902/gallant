@@ -13,6 +13,18 @@ from .repetition_detector import (
     RepetitionAnalysisReport,
     RepetitionDetector,
 )
+from .simhash_dedup import (
+    SimHashDeduplicator,
+    CrossChapterDedupIndex,
+    DynamicFatigueMatrix,
+    DuplicateIncident,
+    DynamicBanListRecommendation,
+)
+from .trope_cooldown import (
+    TropeDefinition,
+    HalfLifeFatigueTracker,
+    TropeCooldownTracker,
+)
 
 __all__ = [
     "Severity",
@@ -22,4 +34,12 @@ __all__ = [
     "DroolingIncident",
     "RepetitionAnalysisReport",
     "RepetitionDetector",
+    "SimHashDeduplicator",
+    "CrossChapterDedupIndex",
+    "DynamicFatigueMatrix",
+    "DuplicateIncident",
+    "DynamicBanListRecommendation",
+    "TropeDefinition",
+    "HalfLifeFatigueTracker",
+    "TropeCooldownTracker",
 ]
