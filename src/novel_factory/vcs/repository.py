@@ -1,13 +1,21 @@
 """
-Narrative VCS Repository - 剧情版本控制与时空回滚仓库 (Git for Stories)
-管理章节提交历史、分支分叉 (Branching)、剧情回滚 (Rollback) 与实体因果图谱同步恢复。
+Narrative VCS Repository - 剧情版本控制与时空回滚仓库 (Git-DAG for Stories)
+管理章节提交历史、分支分叉 (Branching)、剧情回滚 (Rollback) 与实体因果图谱/事件库同步回溯。
+特性：
+1. SHA-256 校验和原子提交；
+2. 一键时空物理回滚 (checkout_chapter)：同步联动 BECGraph, EventStore 与 ProgressionEngine；
+3. 多剧情分支探索 (Branching: 如主线正道 vs 实验性黑化线)；
+4. 分支差分对比 (Branch Diff) 与里程碑标签 (Tagging)。
 """
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from src.novel_factory.core.event_store import EventStore
+from src.novel_factory.codex.progression_engine import ProgressionEngine
 from src.novel_factory.graph.bec_graph import BECGraph
 from src.novel_factory.schemas.commit import StateDelta, StoryCommit
 
@@ -20,16 +28,24 @@ class VCSRollbackError(Exception):
 class NarrativeRepository:
     """剧情版本控制仓库"""
 
-    def __init__(self, db_path: Optional[str] = ":memory:", graph: Optional[BECGraph] = None):
+    def __init__(
+        self,
+        db_path: Optional[str] = ":memory:",
+        graph: Optional[BECGraph] = None,
+        event_store: Optional[EventStore] = None,
+        progression_engine: Optional[ProgressionEngine] = None
+    ):
         self.db_path = db_path
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self.graph = graph or BECGraph(":memory:")
+        self.event_store = event_store
+        self.progression_engine = progression_engine
         self.current_branch: str = "main"
         self._init_tables()
 
     def _init_tables(self):
-        """初始化提交记录表与分支游标表"""
+        """初始化提交记录表、分支表与标签表"""
         with self.conn:
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS commits (
@@ -49,6 +65,14 @@ class NarrativeRepository:
                 CREATE TABLE IF NOT EXISTS branches (
                     branch_name TEXT PRIMARY KEY,
                     head_commit_id TEXT,
+                    created_at REAL NOT NULL
+                )
+            """)
+            self.conn.execute("""
+                CREATE TABLE IF NOT EXISTS tags (
+                    tag_name TEXT PRIMARY KEY,
+                    commit_id TEXT NOT NULL,
+                    message TEXT DEFAULT '',
                     created_at REAL NOT NULL
                 )
             """)
@@ -156,7 +180,11 @@ class NarrativeRepository:
         """
         一键时空回滚：
         将当前分支状态精准回滚到第 target_chapter_index 章末尾状态
-        并同步重置 BECGraph 中的实体与关系
+        并同步联动物理回滚：
+        1. commits 历史游标回退
+        2. BECGraph 关系与属性回退
+        3. EventStore 不可变事件日志截断
+        4. ProgressionEngine 实体演进增量截断
         """
         # 寻找目标章节对应的 Commit
         row = self.conn.execute("""
@@ -184,7 +212,7 @@ class NarrativeRepository:
                 WHERE branch_name = ? AND chapter_index > ?
             """, (self.current_branch, target_chapter_index))
 
-        # 同步回滚 BECGraph (物理删除大于 target_chapter_index 的时序历史)
+        # 1. 同步回滚 BECGraph (物理删除大于 target_chapter_index 的时序历史)
         with self.graph.conn:
             self.graph.conn.execute(
                 "DELETE FROM entity_progression_history WHERE chapter_index > ?",
@@ -194,11 +222,18 @@ class NarrativeRepository:
                 "DELETE FROM entity_relations WHERE valid_from_chapter > ?",
                 (target_chapter_index,)
             )
-            # 恢复失效区间的截止值
             self.graph.conn.execute(
                 "UPDATE entity_relations SET valid_to_chapter = 999999 WHERE valid_to_chapter > ? AND valid_from_chapter <= ?",
                 (target_chapter_index, target_chapter_index)
             )
+
+        # 2. 联动回滚 EventStore
+        if self.event_store:
+            self.event_store.truncate_after_chapter(target_chapter_index)
+
+        # 3. 联动回滚 ProgressionEngine
+        if self.progression_engine:
+            self.progression_engine.truncate_deltas_after_chapter(target_chapter_index)
 
         return True
 
@@ -209,8 +244,8 @@ class NarrativeRepository:
         with self.conn:
             self.conn.execute("""
                 INSERT OR REPLACE INTO branches (branch_name, head_commit_id, created_at)
-                VALUES (?, ?, strftime('%s', 'now'))
-            """, (new_branch_name, head_id))
+                VALUES (?, ?, ?)
+            """, (new_branch_name, head_id, time.time()))
         self.current_branch = new_branch_name
 
     def switch_branch(self, branch_name: str) -> None:
@@ -223,6 +258,26 @@ class NarrativeRepository:
             raise VCSRollbackError(f"目标分支不存在: {branch_name}")
         self.current_branch = branch_name
 
+    def list_branches(self) -> List[Dict[str, Any]]:
+        """列出所有分支信息"""
+        rows = self.conn.execute("SELECT branch_name, head_commit_id, created_at FROM branches").fetchall()
+        return [dict(r) for r in rows]
+
+    def create_tag(self, tag_name: str, commit_id: Optional[str] = None, message: str = "") -> None:
+        """为特定提交打上里程碑标签 (如 v1.0_vol1_climax)"""
+        target_id = commit_id
+        if not target_id:
+            head = self.get_head_commit()
+            if not head:
+                raise VCSRollbackError("当前分支没有任何提交，无法打标签")
+            target_id = head.commit_id
+
+        with self.conn:
+            self.conn.execute("""
+                INSERT OR REPLACE INTO tags (tag_name, commit_id, message, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (tag_name, target_id, message, time.time()))
+
     def get_commit_log(self, limit: int = 20) -> List[Dict[str, Any]]:
         """获取当前分支提交日志链"""
         rows = self.conn.execute("""
@@ -234,6 +289,48 @@ class NarrativeRepository:
 
         return [dict(r) for r in rows]
 
+    def get_commit_history_chain(self, branch_name: str) -> List[Dict[str, Any]]:
+        """沿着 parent_commit_id 追溯分支的完整祖先链 (Git-DAG 拓扑)"""
+        b_row = self.conn.execute(
+            "SELECT head_commit_id FROM branches WHERE branch_name = ?",
+            (branch_name,)
+        ).fetchone()
+        if not b_row or not b_row["head_commit_id"]:
+            return []
+
+        chain = []
+        cur_id = b_row["head_commit_id"]
+        while cur_id:
+            row = self.conn.execute("SELECT * FROM commits WHERE commit_id = ?", (cur_id,)).fetchone()
+            if not row:
+                break
+            chain.append(dict(row))
+            cur_id = row["parent_commit_id"]
+        return chain
+
+    def diff_branches(self, branch_a: str, branch_b: str) -> Dict[str, Any]:
+        """对比两个分支的真实 DAG 提交差异"""
+        chain_a = self.get_commit_history_chain(branch_a)
+        chain_b = self.get_commit_history_chain(branch_b)
+
+        a_map = {r["chapter_index"]: r["commit_id"] for r in chain_a}
+        b_map = {r["chapter_index"]: r["commit_id"] for r in chain_b}
+
+        common_chapters = sorted(set(a_map.keys()) & set(b_map.keys()))
+        divergent_chapters = [ch for ch in common_chapters if a_map[ch] != b_map[ch]]
+        unique_to_a = sorted(set(a_map.keys()) - set(b_map.keys()))
+        unique_to_b = sorted(set(b_map.keys()) - set(a_map.keys()))
+
+        return {
+            "branch_a": branch_a,
+            "branch_b": branch_b,
+            "divergent_chapters": divergent_chapters,
+            "unique_to_a": unique_to_a,
+            "unique_to_b": unique_to_b
+        }
+
     def close(self):
         self.conn.close()
         self.graph.close()
+        if self.event_store:
+            self.event_store.close()
