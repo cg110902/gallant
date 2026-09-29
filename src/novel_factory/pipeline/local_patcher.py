@@ -1,8 +1,13 @@
 """
-Local Patcher - 节拍局部打补丁与微创重绘引擎 (AST / Anchor-based Local Patching)
-拒绝全章推倒重写带来的次生灾害与Token浪费；精准定位质检失败的单分镜节拍，进行原位无缝缝合与差分修复。
+Local Patcher & Segment Splicer - 节拍局部微创打补丁与平滑缝合引擎
+深度解决长篇网文质检修复中的次生灾害与 Token 浪费问题：
+1. 锚点与 AST 双模段落解析与定位；
+2. 原位差分缝合 (In-Place Splicing)：只修缺陷 Beat，其余 75%+ 正文零改动原样保留；
+3. 衔接边界平滑校验 (Transition Boundary Smoothing)：消除引号未闭合、标点冲突或断头句；
+4. 节约 Token 经济学审计与 Unified Diff 变动对比生成。
 """
 
+import difflib
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -15,13 +20,22 @@ class ChapterBeatSegment:
     content: str
 
 
+@dataclass
+class PatchResult:
+    target_beat_id: str
+    patched_full_text: str
+    clean_prose: str
+    tokens_saved_ratio: float  # 节约的 Token 比例 (例如 0.75 表示相比全章重写节省 75%)
+    diff_summary: str
+
+
 class PatchAlignmentError(Exception):
     """补丁对齐或锚点缺失异常"""
     pass
 
 
 class LocalPatcher:
-    """章节节拍局部补丁管理器"""
+    """章节节拍局部补丁与平滑缝合引擎"""
 
     BEAT_START_PATTERN = r"<!--\s*BEAT_START:\s*([a-zA-Z0-9_-]+)\s*-->"
     BEAT_END_PATTERN = r"<!--\s*BEAT_END:\s*([a-zA-Z0-9_-]+)\s*-->"
@@ -50,19 +64,63 @@ class LocalPatcher:
         full_text_with_anchors: str,
         target_beat_id: str,
         new_beat_content: str
-    ) -> str:
+    ) -> PatchResult:
         """
-        原位替换目标 Beat，保持其余所有 Beat 100% 文本与格式不变
+        原位替换目标 Beat，保持其余所有 Beat 100% 文本与格式不变，并审计衔接平滑度
         """
         pattern = re.compile(
             rf"(<!--\s*BEAT_START:\s*{re.escape(target_beat_id)}\s*-->\s*)(.*?)(\s*<!--\s*BEAT_END:\s*{re.escape(target_beat_id)}\s*-->)",
             re.DOTALL
         )
-        if not pattern.search(full_text_with_anchors):
+        match = pattern.search(full_text_with_anchors)
+        if not match:
             raise PatchAlignmentError(f"未在章节中定位到目标节拍锚点: {target_beat_id}")
 
-        replacement = rf"\g<1>{new_beat_content.strip()}\g<3>"
-        return pattern.sub(replacement, full_text_with_anchors, count=1)
+        old_beat_content = match.group(2).strip()
+        cleaned_new_beat = self._sanitize_boundary(new_beat_content.strip())
+
+        # 原位插回
+        replacement = rf"\g<1>{cleaned_new_beat}\g<3>"
+        patched_full_text = pattern.sub(replacement, full_text_with_anchors, count=1)
+        clean_prose = self.render_clean_prose(patched_full_text)
+
+        # 计算节约 Token 经济比率
+        total_len = len(clean_prose)
+        patch_len = len(cleaned_new_beat)
+        saved_ratio = max(0.0, 1.0 - (patch_len / max(1, total_len)))
+
+        # 生成 Diff 摘要
+        diff_lines = list(difflib.unified_diff(
+            old_beat_content.splitlines(),
+            cleaned_new_beat.splitlines(),
+            fromfile=f"old_{target_beat_id}",
+            tofile=f"new_{target_beat_id}",
+            lineterm=""
+        ))
+        diff_summary = "\n".join(diff_lines)
+
+        return PatchResult(
+            target_beat_id=target_beat_id,
+            patched_full_text=patched_full_text,
+            clean_prose=clean_prose,
+            tokens_saved_ratio=round(saved_ratio, 3),
+            diff_summary=diff_summary
+        )
+
+    def _sanitize_boundary(self, text: str) -> str:
+        """平滑边界标点与未闭合双引号"""
+        sanitized = text.strip()
+        # 补全末尾落下的标点
+        if sanitized and sanitized[-1] not in ("。", "！", "？", "”", "…", "；"):
+            sanitized += "。"
+
+        # 检查双引号对称性
+        left_quotes = sanitized.count("“")
+        right_quotes = sanitized.count("”")
+        if left_quotes > right_quotes:
+            sanitized += "”"
+
+        return sanitized
 
     def render_clean_prose(self, full_text_with_anchors: str) -> str:
         """剥离所有锚点注释，导出适合读者阅读的最终纯净文本"""
@@ -79,7 +137,7 @@ class LocalPatcher:
         post_condition_reminders: List[str]
     ) -> str:
         """
-        生成高精度局部重绘 Prompt，强制模型只修改缺陷行，杜绝发散
+        生成高精度局部重绘 Prompt，强制模型只修改缺陷行，杜绝全篇发散重写
         """
         violations_str = "\n".join([f"- [违规项]: {m}" for m in violation_messages])
         reminders_str = "\n".join([f"- [必须满足]: {r}" for r in post_condition_reminders])
