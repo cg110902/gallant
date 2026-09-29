@@ -15,6 +15,8 @@ from src.novel_factory.pipeline.beat_renderer import BeatRenderer
 from src.novel_factory.pipeline.local_patcher import ChapterBeatSegment, LocalPatcher
 from src.novel_factory.qc.mechanical_linter import LintReport, MechanicalLinter
 from src.novel_factory.qc.repetition_detector import RepetitionAnalysisReport, RepetitionDetector
+from src.novel_factory.export.manuscript_exporter import ManuscriptExporter
+from src.novel_factory.llm.cost_tracker import CostTracker
 from src.novel_factory.schemas.beat import BeatContract, BeatOutput
 from src.novel_factory.schemas.commit import StateDelta, StoryCommit
 from src.novel_factory.schemas.entity import LoreEntry
@@ -73,7 +75,11 @@ class NovelFactoryOrchestrator:
         self.patcher = LocalPatcher()
         self.renderer = BeatRenderer()
 
-        # 4. LLM 生成接口（支持传入真实 API 或 Mock 回调）
+        # 4. 初始化成本追踪与全渠道导出器
+        self.cost_tracker = CostTracker()
+        self.exporter = ManuscriptExporter(repo=self.repo, graph=self.graph)
+
+        # 5. LLM 生成接口（支持传入真实 API 或 Mock 回调）
         self.llm_worker = llm_worker or self._default_mock_worker
 
     def _default_mock_worker(self, system_prompt: str, user_prompt: str) -> str:
@@ -132,6 +138,16 @@ class NovelFactoryOrchestrator:
             current_prose = patched_prose
             lint_report = self.linter.lint_text(current_prose)
 
+        # 记录 Token 审计与成本核算
+        self.cost_tracker.record_usage(
+            chapter_index=chapter_index,
+            beat_id=scene_beat.beat_id,
+            model_name="gemini-1.5-flash",
+            input_tokens=assembled.estimated_tokens,
+            cached_input_tokens=int(assembled.estimated_tokens * 0.75),
+            output_tokens=max(1, len(current_prose) // 2)
+        )
+
         return BeatProductionResult(
             beat_id=scene_beat.beat_id,
             prose=current_prose,
@@ -182,6 +198,9 @@ class NovelFactoryOrchestrator:
             recent_chapters_text=history_texts
         )
 
+        # 获取本章财务成本核算
+        cost_summary = self.cost_tracker.get_chapter_cost_summary(chapter_index)
+
         # 原子提交至 Narrative VCS 并同步推进 BEC-Graph
         commit = self.repo.commit_chapter(
             chapter_index=chapter_index,
@@ -191,7 +210,8 @@ class NovelFactoryOrchestrator:
             qc_metrics={
                 "all_beats_passed": all(b.qc_passed for b in beat_results),
                 "total_patches": sum(b.patch_count for b in beat_results),
-                "ttr_score": rep_report.ttr_diversity_score
+                "ttr_score": rep_report.ttr_diversity_score,
+                "cost_summary": cost_summary
             }
         )
 
