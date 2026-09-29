@@ -11,6 +11,13 @@ from .client import (
     get_llm_provider,
 )
 from .cost_tracker import CostTracker, ModelPricing, TokenUsageRecord
+from .cost_auditor import (
+    BookCostSummary,
+    ChapterCostSummary,
+    CostAuditor,
+    FinancialAlertLevel,
+    FinancialCircuitBreakerError,
+)
 from .gateway import (
     CircuitState,
     GatewayCircuitError,
@@ -28,6 +35,11 @@ __all__ = [
     "CostTracker",
     "ModelPricing",
     "TokenUsageRecord",
+    "CostAuditor",
+    "ChapterCostSummary",
+    "BookCostSummary",
+    "FinancialAlertLevel",
+    "FinancialCircuitBreakerError",
     "CircuitState",
     "GatewayCircuitError",
     "GatewayConfig",
