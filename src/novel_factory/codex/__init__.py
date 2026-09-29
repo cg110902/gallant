@@ -1,13 +1,25 @@
 """
-Codex Module - 确定性上下文装配与套路调度导出
+Codex Module - 确定性上下文装配与世界知识检索
 """
 
 from .codex_assembler import AssembledContext, CodexAssembler
 from .trope_cooldown import TropeCooldownTracker, TropeDefinition
+from .recursive_compiler import (
+    CodexEntry,
+    SelectiveLogic,
+    CodexEntryCategory,
+    CompiledCodexResult,
+    RecursiveCodexCompiler,
+)
 
 __all__ = [
-    "CodexAssembler",
     "AssembledContext",
+    "CodexAssembler",
     "TropeCooldownTracker",
     "TropeDefinition",
+    "CodexEntry",
+    "SelectiveLogic",
+    "CodexEntryCategory",
+    "CompiledCodexResult",
+    "RecursiveCodexCompiler",
 ]
