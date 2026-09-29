@@ -25,6 +25,10 @@ from .trope_cooldown import (
     HalfLifeFatigueTracker,
     TropeCooldownTracker,
 )
+from .llm_judge import (
+    JudgeEvaluation,
+    LLMJudge,
+)
 
 __all__ = [
     "Severity",
@@ -42,4 +46,6 @@ __all__ = [
     "TropeDefinition",
     "HalfLifeFatigueTracker",
     "TropeCooldownTracker",
+    "JudgeEvaluation",
+    "LLMJudge",
 ]
