@@ -10,6 +10,7 @@ Mechanical Linter - 数据与配置驱动的高精度纯机制机械质检与语
 
 from dataclasses import dataclass, field
 from enum import Enum
+import hashlib
 from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -220,6 +221,23 @@ class MechanicalLinter:
                     enabled=True
                 )
             )
+
+    def add_banned_phrases(self, phrases: List[str], category: str = "GENRE_CLICHE") -> None:
+        """动态注册特定题材禁忌词/陈腐套话"""
+        for p in phrases:
+            if not p or not p.strip():
+                continue
+            rule_id = f"BAN_{hashlib.md5(p.encode('utf-8')).hexdigest()[:8]}"
+            if any(r.id == rule_id for r in self.rules):
+                continue
+            self.rules.append(LintRule(
+                id=rule_id,
+                category=category,
+                severity=Severity.ERROR,
+                pattern=re.escape(p),
+                message=f"命中题材专属禁用套话/陈腐口水词: 【{p}】",
+                suggestion=f"严禁在正文中使用「{p}」，请用具体的物理动作或微机位描写替代。"
+            ))
 
     def prune_tail_moralizers(self, text: str) -> Tuple[str, int]:
         """

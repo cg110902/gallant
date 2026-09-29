@@ -1,0 +1,49 @@
+# 硬核太空歌剧 / 星际文明争霸 题材法则体系配置
+genre: "SPACE_OPERA"
+name: "群星争霸与深空远征"
+
+# 力量与战力标尺定义 (卡尔达肖夫文明等级与战舰规格)
+power_scale:
+  scale_name: "卡尔达肖夫文明量级与星舰作战能级"
+  max_cross_tier_gap: 1
+  tiers:
+    - tier_id: "PLANETARY_0_7"
+      name: "行星内殖民文明 (Type 0.7)"
+      numeric_min: 0
+      numeric_max: 50
+      description: "受限于化学工质与裂变动力，仅能开发母星环绕轨道"
+    - tier_id: "STELLAR_I"
+      name: "恒星系主权文明 (Type I)"
+      numeric_min: 50
+      numeric_max: 500
+      description: "聚变推进引擎、掌握全行星气候改造，建有近地轨道防御环"
+    - tier_id: "INTERSTELLAR_II"
+      name: "曲率跃迁星际帝国 (Type II)"
+      numeric_min: 500
+      numeric_max: 5000
+      description: "建造戴森球/环形世界，掌握曲率折叠航行，装备亚光速宏动能主炮"
+    - tier_id: "GALACTIC_III"
+      name: "银河神级文明 (Type III)"
+      numeric_min: 5000
+      numeric_max: 50000
+      description: "掌控真空零点能与时空曲率武器，可实施恒星引爆与降维打击"
+
+# 星际战舰与邦交专属关系
+custom_relation_types:
+  - "COMMANDS_FLAGSHIP"    # 执掌旗舰
+  - "PLANETARY_GOVERNOR"   # 行星总督领属
+  - "TREATY_DEFENSE_PACT"  # 恒星防卫同盟条约
+  - "TRADE_EMBARGO"        # 超空间航路禁运
+  - "AI_INTEGRATED_WITH"   # 舰载超脑心智纽带
+
+# 专属核心资产
+exclusive_item_categories:
+  - "FLAGSHIP_COMMAND_CORE" # 帝国无畏舰最高指挥权秘钥
+  - "DYSON_SPHERE_CONTROL"  # 戴森球能量枢纽主控台
+
+# 星际歌剧专属禁忌套路
+genre_banned_cliches:
+  - "宇宙如同一张漆黑的幕布"
+  - "这让他深深感受到了人类的渺小"
+  - "浩瀚的星空仿佛在向他招手"
+  - "这一幕震撼了在场的所有人"

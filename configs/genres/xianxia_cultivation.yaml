@@ -1,0 +1,64 @@
+# 东方仙侠 / 传统修真 / 玄幻修仙 题材法则体系配置
+genre: "XIANXIA_CULTIVATION"
+name: "东方玄幻与九霄修真"
+
+# 力量与战力标尺定义 (境界阶梯与跨阶威压法则)
+power_scale:
+  scale_name: "天地灵气阶梯与天道境界标尺"
+  max_cross_tier_gap: 1 # 允许至多跨 1 个大境界借助顶级法宝逆伐，超过则触发天道威压不变式熔断
+  tiers:
+    - tier_id: "TIER_MORTAL"
+      name: "凡人俗胎"
+      numeric_min: 0
+      numeric_max: 10
+      description: "肉体凡胎，未通气海，受生老病死与人间兵刃制约"
+    - tier_id: "TIER_QI_CONDENSATION"
+      name: "练气期 (一至九层)"
+      numeric_min: 10
+      numeric_max: 100
+      description: "引灵入体，气走周天，能驭使下品飞剑与低阶符箓"
+    - tier_id: "TIER_FOUNDATION"
+      name: "筑基期"
+      numeric_min: 100
+      numeric_max: 500
+      description: "灵气化液，寿元二百，神念离体百丈，辟谷御空"
+    - tier_id: "TIER_GOLDEN_CORE"
+      name: "金丹期 (一品至九品金丹)"
+      numeric_min: 500
+      numeric_max: 2000
+      description: "凝丹化煞，寿元五百，本命法宝通灵，丹火可焚山煮海"
+    - tier_id: "TIER_NASCENT_SOUL"
+      name: "元婴期"
+      numeric_min: 2000
+      numeric_max: 8000
+      description: "破丹成婴，元婴出窍，移山填海，肉身毁坏仍可夺舍重修"
+    - tier_id: "TIER_DEITY_TRANSFORMATION"
+      name: "化神期"
+      numeric_min: 8000
+      numeric_max: 30000
+      description: "感悟天地法则，初步掌控虚空挪移，寿元数千载，俯瞰一界"
+
+# 仙侠专属实体关系语义拓扑
+custom_relation_types:
+  - "MASTER_DISCIPLE"       # 师徒承负 (因果羁绊)
+  - "DAO_COMPANION"          # 道侣契约 (神魂同契)
+  - "BLOOD_FEUD"             # 灭门血仇 (不死不休)
+  - "BOUND_SPIRIT_BEAST"     # 血契灵兽
+  - "KARMIC_DEBTOR"          # 因果债主 (天道誓言)
+  - "SECT_PATRIARCH_OF"      # 宗门老祖守护
+
+# 仙侠专属排他性法宝类别
+exclusive_item_categories:
+  - "NATAL_TREASURE"         # 本命法宝 (唯一神魂认主)
+  - "PRIMORDIAL_SPIRIT_TREASURE" # 先天通天灵宝
+  - "STORAGE_RING"           # 储物戒/储物袋
+
+# 仙侠领域专属禁忌与套路疲劳词 (严禁出现陈腐网络口水词)
+genre_banned_cliches:
+  - "此子断不可留"
+  - "恐怖如斯"
+  - "倒吸一口凉气"
+  - "眼神深邃如星空"
+  - "嘴角勾起一抹残忍的弧度"
+  - "宛如九天神魔降世"
+  - "这一幕让他深深明白"

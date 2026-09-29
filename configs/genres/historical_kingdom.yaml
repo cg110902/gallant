@@ -1,0 +1,56 @@
+# 历史权谋 / 架空王朝争霸 / 种田经略 题材法则体系配置
+genre: "HISTORICAL_KINGDOM"
+name: "架空王朝与铁血权谋"
+
+# 官阶、爵位与军职标尺
+power_scale:
+  scale_name: "大一统王朝品阶与军功爵标尺"
+  max_cross_tier_gap: 2
+  tiers:
+    - tier_id: "COMMON_FOLK"
+      name: "草莽白丁"
+      numeric_min: 0
+      numeric_max: 10
+      description: "无官无爵，受赋税徭役制约，无佩甲仗兵之权"
+    - tier_id: "SCHOLAR_OFFICER"
+      name: "秀才举人/里正九品官"
+      numeric_min: 10
+      numeric_max: 80
+      description: "见官不跪，享免役特权，通晓律令公文"
+    - tier_id: "COUNTY_MAGISTRATE"
+      name: "正七品知县/禁军校尉"
+      numeric_min: 80
+      numeric_max: 300
+      description: "主政一邑，掌断案征粮之权，麾下可领兵数百"
+    - tier_id: "MINISTER_GOVERNOR"
+      name: "封疆大吏/六部侍郎 (三至四品)"
+      numeric_min: 300
+      numeric_max: 1500
+      description: "总督数州兵马钱粮，佩尚方宝剑或天子节钺"
+    - tier_id: "PRIME_MINISTER_REGENT"
+      name: "宰辅柱国/摄政权臣 (一至二品)"
+      numeric_min: 1500
+      numeric_max: 8000
+      description: "执掌中枢政令，门生故吏遍天下，一言可兴废朝纲"
+
+# 历史权谋专属关系
+custom_relation_types:
+  - "PATRON_PROTÉGÉ"      # 座师与门生
+  - "FACTION_ALLIANCE"    # 党争同盟
+  - "MILITARY_SUBORDINATE" # 牙将家兵私属
+  - "MARRIAGE_ALLIANCE"   # 门阀联姻
+  - "IMPERIAL_DECREE_FROM" # 奉天承运密旨受命
+
+# 核心排他性信物
+exclusive_item_categories:
+  - "IMPERIAL_JADE_SEAL"   # 传国玉玺
+  - "TALLY_TIGER_TOKEN"    # 调兵虎符
+  - "IMPERIAL_TALLY_SWORD" # 尚方斩马剑
+
+# 历史文陈腐套路封禁
+genre_banned_cliches:
+  - "不由得心中暗道"
+  - "满堂文武尽皆失色"
+  - "冷汗瞬间浸透了后背"
+  - "天威难测啊"
+  - "这让他深深明白伴君如伴虎"

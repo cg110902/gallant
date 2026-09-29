@@ -19,7 +19,7 @@ Novel Factory Orchestrator - 工业级全链路总编排中枢 (16-Phase Unified
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import yaml
 
 from src.novel_factory.agents.orchestrator_bridge import SubagentCoordinationBus
@@ -32,8 +32,10 @@ from src.novel_factory.core.event_store import EventStore, WorldSnapshot
 from src.novel_factory.core.events import Event, EventType
 from src.novel_factory.export.manuscript_exporter import ManuscriptExporter
 from src.novel_factory.graph.bec_graph import BECGraph
+from src.novel_factory.config.loader import ProjectConfigLoader
+from src.novel_factory.config.schemas import ProjectConfig
 from src.novel_factory.graph.causal_dag import CausalDAG
-from src.novel_factory.graph.invariant_checker import InvariantChecker, InvariantReport, ProposedAction
+from src.novel_factory.graph.invariant_checker import InvariantChecker, InvariantReport, InvariantViolation, ProposedAction
 from src.novel_factory.llm.client import MockLLMProvider
 from src.novel_factory.llm.cost_auditor import ChapterCostSummary, CostAuditor, FinancialCircuitBreakerError
 from src.novel_factory.llm.cost_tracker import CostTracker
@@ -85,10 +87,17 @@ class NovelFactoryOrchestrator:
         llm_worker: Optional[Callable[[str, str], str]] = None,
         max_cost_per_chapter: float = 0.40
     ):
+        self.config_loader = ProjectConfigLoader()
+        self.project_config: Optional[ProjectConfig] = None
         self.config: Dict[str, Any] = {}
         if project_config_path and Path(project_config_path).exists():
-            with open(project_config_path, "r", encoding="utf-8") as f:
-                self.config = yaml.safe_load(f) or {}
+            try:
+                self.project_config = self.config_loader.load_project_master(project_config_path)
+                with open(project_config_path, "r", encoding="utf-8") as f:
+                    self.config = yaml.safe_load(f) or {}
+            except Exception:
+                with open(project_config_path, "r", encoding="utf-8") as f:
+                    self.config = yaml.safe_load(f) or {}
 
         # 1. 基础设施：事件存储与时态图谱
         self.event_store = EventStore(db_path=db_path)
@@ -127,8 +136,44 @@ class NovelFactoryOrchestrator:
         self.fatigue_matrix = DynamicFatigueMatrix()
         self.llm_judge = LLMJudge(min_pass_score=7.5)
 
+        # 6.5. 声明式题材法则动态注入 (Domain/Genre Rules Injection)
+        if self.project_config and self.project_config.genre:
+            # A. 题材套路与陈腐网络词动态追加到 Linter
+            if self.project_config.genre.genre_banned_cliches:
+                self.linter.add_banned_phrases(self.project_config.genre.genre_banned_cliches)
+
+            # B. 战力标尺越阶不可逆天道硬不变式
+            if self.project_config.genre.power_scale:
+                scale = self.project_config.genre.power_scale
+
+                def power_tier_invariant(snap: WorldSnapshot, action: ProposedAction, report: InvariantReport) -> None:
+                    if action.action_type in ("MELEE_ATTACK", "DUEL", "COMBAT_KILL") and action.target_id:
+                        actor_ent = snap.entities.get(action.actor_id)
+                        target_ent = snap.entities.get(action.target_id)
+                        if actor_ent and target_ent:
+                            a_tier = actor_ent.get("tier_id")
+                            t_tier = target_ent.get("tier_id")
+                            if a_tier and t_tier:
+                                a_idx = scale.get_tier_index(a_tier)
+                                t_idx = scale.get_tier_index(t_tier)
+                                if a_idx is not None and t_idx is not None:
+                                    if (t_idx - a_idx) > scale.max_cross_tier_gap:
+                                        report.violations.append(InvariantViolation(
+                                            rule_name="POWER_SCALE_OVERPOWERED_GAP",
+                                            severity="ERROR",
+                                            message=f"战力法则越阶不可逆：[{action.actor_id}] (位阶 {a_tier}) 企图逆伐超高位阶目标 [{action.target_id}] (位阶 {t_tier})，阶差超出最大容限 {scale.max_cross_tier_gap}",
+                                            entity_ids=[action.actor_id, action.target_id],
+                                            chapter_index=report.chapter_index,
+                                            beat_id=report.beat_id
+                                        ))
+
+                self.invariant_checker.register_custom_rule(power_tier_invariant)
+
         # 7. 财务审计与商业断路器
-        self.cost_auditor = CostAuditor(max_cost_per_chapter_cny=max_cost_per_chapter)
+        effective_limit = max_cost_per_chapter
+        if self.project_config and self.project_config.models:
+            effective_limit = self.project_config.models.cost_limit_per_chapter_cny
+        self.cost_auditor = CostAuditor(max_cost_per_chapter_cny=effective_limit)
         self.cost_tracker = CostTracker()  # 兼容原型调用
 
         # 8. 智能体总线与人机断点
@@ -145,6 +190,20 @@ class NovelFactoryOrchestrator:
 
         # 10. LLM 生成调用钩子
         self.llm_worker = llm_worker or self._default_mock_worker
+
+    @classmethod
+    def from_project_config(
+        cls,
+        config_path: Optional[Union[str, Path]] = "project.yaml",
+        db_path: Optional[str] = ":memory:",
+        llm_worker: Optional[Callable[[str, str], str]] = None
+    ) -> "NovelFactoryOrchestrator":
+        """从 project.yaml 声明式工程规范快速实例化小说工厂编排引擎"""
+        return cls(
+            project_config_path=str(config_path) if config_path else None,
+            db_path=db_path,
+            llm_worker=llm_worker
+        )
 
     def _default_mock_worker(self, system_prompt: str, user_prompt: str) -> str:
         """默认回退生成器"""
@@ -218,6 +277,15 @@ class NovelFactoryOrchestrator:
             scene_beat=scene_beat
         )
         current_prose = self.llm_worker(prompts["system_prompt"], prompts["user_prompt"])
+
+        # 4.5. 流式防流口水与退化截断 (Stream Degeneration & Anti-Drooling Breaker)
+        self.stream_monitor.reset()
+        for ch in current_prose:
+            stream_res = self.stream_monitor.feed_chunk(ch)
+            if stream_res.is_aborted:
+                current_prose = self.stream_monitor.get_clean_text()
+                feedback_history.append(f"防流口水截断生效: {stream_res.abort_reason}")
+                break
 
         # 5. 声明式机械质检与局部微创 Patch 循环
         lint_report = self.linter.lint_text(current_prose)

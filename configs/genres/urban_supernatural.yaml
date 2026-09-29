@@ -1,0 +1,54 @@
+# 都市异能 / 现代超自然 / 猎人觉醒 题材法则体系配置
+genre: "URBAN_SUPERNATURAL"
+name: "都市异能与暗夜猎人工会"
+
+# 力量与战力标尺定义 (觉醒等级与以太能级)
+power_scale:
+  scale_name: "国际觉醒者能级核定标准 (F-S级)"
+  max_cross_tier_gap: 1
+  tiers:
+    - tier_id: "RANK_UNAWAKENED"
+      name: "普通平民 (Unawakened)"
+      numeric_min: 0
+      numeric_max: 20
+      description: "未觉醒体内魔能核心，生活于伪装的现代和平表象之下"
+    - tier_id: "RANK_E_D"
+      name: "低阶觉醒者 (E-D级)"
+      numeric_min: 20
+      numeric_max: 150
+      description: "身体机能强化为常人3-5倍，能施展微弱元素投射或微感知"
+    - tier_id: "RANK_C_B"
+      name: "中坚战术猎人 (C-B级)"
+      numeric_min: 150
+      numeric_max: 800
+      description: "工会突击队主力，肉身可抵御小口径枪械，掌握范围异能控制"
+    - tier_id: "RANK_A"
+      name: "灾害级执行官 (A级)"
+      numeric_min: 800
+      numeric_max: 3000
+      description: "一人成军，可单枪匹马镇压高危地下城裂隙，城市战略级筹码"
+    - tier_id: "RANK_S"
+      name: "国家战略级支柱 (S级)"
+      numeric_min: 3000
+      numeric_max: 20000
+      description: "拥有改变局部气候与地貌的法则级异能，全球仅存百余人"
+
+# 都市异能专属实体关系
+custom_relation_types:
+  - "GUILD_AFFILIATION"    # 所属工会契约
+  - "SECRECY_PACT_BOUND"   # 超自然保密法案监管契约
+  - "AWAKENING_MENTOR"     # 引路教官
+  - "BOUNTY_TARGET_OF"     # 黑市暗杀赏金契约
+
+# 专属排他性装备与道具
+exclusive_item_categories:
+  - "AETHER_CORE_WEAPON"   # 专属绑定以太圣遗物
+  - "HUNTER_LICENSE"       # 国际猎人执照
+
+# 都市异能专属陈腐套路封禁
+genre_banned_cliches:
+  - "扮猪吃老虎"
+  - "冷笑连连"
+  - "满座皆惊"
+  - "众人倒吸一口冷气"
+  - "殊不知他早已是神一般的主宰"
