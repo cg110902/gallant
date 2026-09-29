@@ -1,5 +1,5 @@
 """
-LLM Module - 模型网关与成本审计导出
+LLM Module - 大模型驱动、网关路由器与财务审计
 """
 
 from .client import (
@@ -10,10 +10,12 @@ from .client import (
     OpenAICompatibleProvider,
     get_llm_provider,
 )
-from .cost_tracker import (
-    CostTracker,
-    ModelPricing,
-    TokenUsageRecord,
+from .cost_tracker import CostTracker, ModelPricing, TokenUsageRecord
+from .gateway import (
+    CircuitState,
+    GatewayCircuitError,
+    GatewayConfig,
+    ModelGateway,
 )
 
 __all__ = [
@@ -26,4 +28,8 @@ __all__ = [
     "CostTracker",
     "ModelPricing",
     "TokenUsageRecord",
+    "CircuitState",
+    "GatewayCircuitError",
+    "GatewayConfig",
+    "ModelGateway",
 ]
