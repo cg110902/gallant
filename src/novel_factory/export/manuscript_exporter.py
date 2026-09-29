@@ -1,6 +1,10 @@
 """
-Manuscript Exporter - 商业全渠道稿件导出器
-支持番茄/起点标准 TXT（两格全角缩进与分章规范）、全书 Markdown 目录书卷排版、模型微调 JSONL 数据集与 World Bible 设定集全量导出。
+Manuscript Exporter - 商业全渠道稿件导出器与 SFT 数据飞轮管道
+支持：
+1. 起点/番茄平台投稿标准 TXT（每段两格全角中文缩进 '　　' 与规范空行）；
+2. 结构化 Markdown 文档（含 YAML Frontmatter、全书目录超链接导航）；
+3. 大模型 SFT 微调数据集自动沉淀（Instruction-Context-Response 标准 ShareGPT / JSONL 格式）；
+4. 世界设定集总账 (World Bible JSON) 全量导出。
 """
 
 import json
@@ -47,12 +51,12 @@ class ManuscriptExporter:
         indent = "　　" if full_width_indent else ""
 
         for ch in chapters:
-            lines.append(f"\n\n{ch['title']}\n")
+            lines.append(f"\n\n{ch['title']}\n\n")
             prose = ch["full_prose"]
             for paragraph in prose.split("\n"):
                 p = paragraph.strip()
                 if p:
-                    lines.append(f"{indent}{p}\n")
+                    lines.append(f"{indent}{p}\n\n")
 
         full_content = "".join(lines).strip()
         Path(output_file_path).parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +86,7 @@ class ManuscriptExporter:
             "## 目录 (Table of Contents)\n"
         ]
 
-        # 生成目录
+        # 生成目录超链接
         for ch in chapters:
             md_blocks.append(f"- [{ch['title']}](#chapter-{ch['chapter_index']})")
         md_blocks.append("\n---\n")
@@ -101,10 +105,14 @@ class ManuscriptExporter:
 
         return len(content)
 
-    def export_to_jsonl_dataset(self, output_file_path: str) -> int:
+    def export_to_jsonl_dataset(
+        self,
+        output_file_path: str,
+        format_style: str = "sharegpt"  # sharegpt or raw
+    ) -> int:
         """
         导出为大模型 SFT 微调数据格式 (JSONL)
-        每行为一条带上下文、分镜契约与合格正文的训练样本
+        自动沉淀优质训练样本，构建数据飞轮
         """
         chapters = self.get_all_chapters()
         dataset_count = 0
@@ -112,13 +120,37 @@ class ManuscriptExporter:
 
         with open(output_file_path, "w", encoding="utf-8") as f:
             for ch in chapters:
-                item = {
-                    "chapter_index": ch["chapter_index"],
-                    "title": ch["title"],
-                    "word_count": ch["word_count"],
-                    "commit_id": ch["commit_id"],
-                    "prose": ch["full_prose"]
-                }
+                if format_style == "sharegpt":
+                    item = {
+                        "id": f"novel_factory_{ch['commit_id'][:10]}",
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "你是一名工业级网文主笔作家，严格遵循机位调度与微事件推进，杜绝空洞说教。"
+                            },
+                            {
+                                "role": "user",
+                                "content": f"请为小说创作章节【{ch['title']}】的正文内容。"
+                            },
+                            {
+                                "role": "assistant",
+                                "content": ch["full_prose"]
+                            }
+                        ],
+                        "metadata": {
+                            "chapter_index": ch["chapter_index"],
+                            "word_count": ch["word_count"],
+                            "qc_metrics": json.loads(ch.get("qc_metrics_json") or "{}")
+                        }
+                    }
+                else:
+                    item = {
+                        "chapter_index": ch["chapter_index"],
+                        "title": ch["title"],
+                        "word_count": ch["word_count"],
+                        "commit_id": ch["commit_id"],
+                        "prose": ch["full_prose"]
+                    }
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
                 dataset_count += 1
 
