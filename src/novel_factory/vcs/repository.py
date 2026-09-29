@@ -307,22 +307,44 @@ class NarrativeRepository:
         return [dict(r) for r in rows]
 
     def restore_orphaned_commit(self, commit_id: str) -> bool:
-        """把被回滚掉的提交重新挂回分支（撤销一次误回滚）"""
+        """
+        撤销回滚：把提交重新挂回分支，并连带恢复它与当前 HEAD 之间的整段链条。
+
+        只恢复单个提交是不够的——它的父节点若仍是孤立状态，
+        祖先链就断在那里。实测中回滚 10 章后恢复最后一章，
+        可见章节从 20 章直接塌缩到 1 章。
+        """
         row = self.conn.execute(
             "SELECT * FROM commits WHERE commit_id = ? AND is_orphaned = 1", (commit_id,)
         ).fetchone()
         if not row:
             return False
+
+        branch = row["branch_name"]
+        target_chapter = row["chapter_index"]
         with self.conn:
+            # 恢复该章及其之前所有被同一次回滚标记为孤立的提交，保证链条连续
             self.conn.execute(
-                "UPDATE commits SET is_orphaned = 0 WHERE commit_id = ?", (commit_id,)
+                "UPDATE commits SET is_orphaned = 0 "
+                "WHERE branch_name = ? AND is_orphaned = 1 AND chapter_index <= ?",
+                (branch, target_chapter)
             )
             self.conn.execute(
                 "UPDATE branches SET head_commit_id = ? WHERE branch_name = ?",
-                (commit_id, row["branch_name"])
+                (commit_id, branch)
             )
-        self._materialize_world_to(row["chapter_index"])
+        self.rebuild_world_from_history(branch)
         return True
+
+    def restore_all_orphaned(self, branch_name: Optional[str] = None) -> int:
+        """完全撤销回滚：恢复该分支上全部孤立提交，返回恢复条数"""
+        branch = branch_name or self.current_branch
+        orphans = self.list_orphaned_commits(branch)
+        if not orphans:
+            return 0
+        last = max(orphans, key=lambda o: o["chapter_index"])
+        self.restore_orphaned_commit(last["commit_id"])
+        return len(orphans)
 
     def _materialize_world_to(self, chapter_index: int) -> None:
         """把图谱/事件库/演进引擎同步到指定章节末尾状态"""

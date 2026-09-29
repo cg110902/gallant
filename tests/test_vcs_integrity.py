@@ -248,3 +248,60 @@ def test_exporter_sees_no_duplicate_chapters(orch):
         )
     chapters = orch.exporter.get_all_chapters()
     assert [c["chapter_index"] for c in chapters] == [1, 2]
+
+
+def test_restoring_a_multi_chapter_rollback_keeps_the_chain_intact(orch):
+    """
+    实测发现：回滚 10 章后恢复最后一条孤立提交，
+    可见章节从 20 章塌缩到 1 章——被恢复提交的父节点仍是孤立状态，祖先链断了。
+    恢复必须连带补齐整段链条。
+    """
+    for ch in range(1, 21):
+        _commit(orch, ch, f"第{ch}章", ch * 10.0)
+    assert len(orch.repo.get_commit_log(99)) == 20
+
+    orch.repo.checkout_chapter(10)
+    assert len(orch.repo.get_commit_log(99)) == 10
+    orphans = orch.repo.list_orphaned_commits()
+    assert len(orphans) == 10
+
+    last_orphan = max(orphans, key=lambda o: o["chapter_index"])
+    assert orch.repo.restore_orphaned_commit(last_orphan["commit_id"]) is True
+
+    log = orch.repo.get_commit_log(99)
+    assert [c["chapter_index"] for c in log] == list(range(1, 21)), \
+        "恢复后祖先链必须连续，不能只剩被恢复的那一章"
+    assert orch.repo.list_orphaned_commits() == []
+
+
+def test_partial_restore_stops_at_requested_chapter(orch):
+    """只想撤销一半回滚时，恢复到指定章为止"""
+    for ch in range(1, 11):
+        _commit(orch, ch, f"第{ch}章", ch * 10.0)
+    orch.repo.checkout_chapter(4)
+
+    orphans = orch.repo.list_orphaned_commits()
+    target = next(o for o in orphans if o["chapter_index"] == 7)
+    orch.repo.restore_orphaned_commit(target["commit_id"])
+
+    log = orch.repo.get_commit_log(99)
+    assert [c["chapter_index"] for c in log] == [1, 2, 3, 4, 5, 6, 7]
+    assert [o["chapter_index"] for o in orch.repo.list_orphaned_commits()] == [8, 9, 10]
+
+
+def test_restore_all_orphaned_undoes_the_rollback(orch):
+    for ch in range(1, 11):
+        _commit(orch, ch, f"第{ch}章", ch * 10.0)
+    orch.repo.checkout_chapter(3)
+    assert orch.repo.restore_all_orphaned() == 7
+    assert len(orch.repo.get_commit_log(99)) == 10
+
+
+def test_restore_rebuilds_world_state(orch):
+    for ch in range(1, 11):
+        _commit(orch, ch, f"第{ch}章", ch * 10.0)
+    orch.repo.checkout_chapter(5)
+    assert orch.graph.get_entity_state_at("c1", 10)["power_rating"] == 50.0
+
+    orch.repo.restore_all_orphaned()
+    assert orch.graph.get_entity_state_at("c1", 10)["power_rating"] == 100.0

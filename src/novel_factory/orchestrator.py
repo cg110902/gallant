@@ -478,6 +478,20 @@ class NovelFactoryOrchestrator:
             }
         ), idempotent=True)
 
+    @staticmethod
+    def _draft_penalty(lint_report: LintReport, contract_report: ContractAuditReport) -> tuple:
+        """
+        给一版草稿打"惩罚分"，越小越好。用于在补丁循环中挑出最优版本。
+        排序优先级：致命违约 > 严重违约 > 文本违规 > 字数偏离 > 轻微违约。
+        """
+        return (
+            len(contract_report.fatal_breaches),
+            len(contract_report.major_breaches),
+            len(lint_report.violations),
+            round(abs(1.0 - contract_report.word_compliance_ratio), 3),
+            len(contract_report.breaches),
+        )
+
     def _recursive_select_lore(
         self,
         lore_entries: List[LoreEntry],
@@ -531,6 +545,13 @@ class NovelFactoryOrchestrator:
         selected = [e for e in valid if e.entry_id in activated_ids]
         # 一条都没命中时保留全局常驻词条，避免上下文彻底失去世界观基线
         return selected or [e for e in valid if e.is_global]
+
+    def _all_entity_names(self) -> List[Dict[str, Any]]:
+        """图谱中全部实体（角色/地点/物品/势力）的名称，用于专有名词保护"""
+        try:
+            return self.graph.list_entities()
+        except Exception:
+            return []
 
     def _known_character_names(self) -> Dict[str, str]:
         """读取图谱中全部角色实体的 id->名字 映射，供在场纪律检查使用"""
@@ -759,6 +780,7 @@ class NovelFactoryOrchestrator:
         )
 
         # 4. 编译 Prompt 并下发给 Worker
+        known_names_for_prompt = self._known_character_names()
         governance_directives = self.collect_governance_directives(
             chapter_index=chapter_index,
             present_entities=list(scene_beat.characters_present)
@@ -769,6 +791,10 @@ class NovelFactoryOrchestrator:
             dynamic_ban_list=[
                 r.word for r in self.fatigue_matrix.get_dynamic_ban_list(chapter_index)
             ] or None,
+            character_names={
+                cid: known_names_for_prompt.get(cid, "")
+                for cid in scene_beat.characters_present
+            },
             governance_directives=governance_directives or None,
             persona_block=self.persona_registry.build_context_block(
                 chapter_index, scene_beat.characters_present
@@ -778,6 +804,11 @@ class NovelFactoryOrchestrator:
         current_prose = self.llm_worker(prompts["system_prompt"], prompts["user_prompt"])
 
         # 4.5. 流式防流口水与退化截断 (Stream Degeneration & Anti-Drooling Breaker)
+        #      先把图谱里的专有名词交给监控器，避免把角色名的正常复现误判为退化。
+        self.stream_monitor.set_protected_terms(
+            list(known_names_for_prompt.values())
+            + [e["name"] for e in self._all_entity_names()]
+        )
         self.stream_monitor.reset()
         for ch in current_prose:
             stream_res = self.stream_monitor.feed_chunk(ch)
@@ -793,6 +824,13 @@ class NovelFactoryOrchestrator:
             contract=scene_beat, prose=current_prose, known_character_names=known_names
         )
         patch_count = 0
+
+        # 记录迄今为止最优的一版。
+        # 打补丁是一次完整的再生成，完全可能改出更多问题——实测中出现过
+        # 「补丁前 0+1 处违规，补丁后 2+2 处」的倒退。修复动作绝不允许降低质量，
+        # 因此全程保留最优版本，循环结束后回退到它。
+        best = (self._draft_penalty(lint_report, contract_report), current_prose,
+                lint_report, contract_report)
 
         # 6. 局部微创 Patch 循环：任一闸门未过即定向修补
         while (not lint_report.passed or not contract_report.passed) and patch_count < max_patch_retries:
@@ -814,14 +852,37 @@ class NovelFactoryOrchestrator:
                     chapter_index, scene_beat.characters_present
                 ),
                 time_anchor_line=self.calendar.build_context_line(chapter_index),
-                target_words=scene_beat.target_words
+                target_words=scene_beat.target_words,
+                micro_events=[e.description for e in scene_beat.micro_events],
+                camera_angles=[c.value for c in scene_beat.required_camera_angles],
+                present_characters=[
+                    known_names_for_prompt.get(c) or c
+                    for c in scene_beat.characters_present
+                ],
+                pacing_type=scene_beat.pacing_type.value,
+                required_ending=(
+                    scene_beat.post_conditions[-1] if scene_beat.post_conditions else None
+                ),
             )
 
             patched_prose = self.llm_worker(prompts["system_prompt"], patch_prompt)
-            current_prose = patched_prose
-            lint_report = self.linter.lint_text(current_prose)
-            contract_report = self.contract_auditor.audit(
-                contract=scene_beat, prose=current_prose, known_character_names=known_names
+            patched_lint = self.linter.lint_text(patched_prose)
+            patched_contract = self.contract_auditor.audit(
+                contract=scene_beat, prose=patched_prose, known_character_names=known_names
+            )
+            penalty = self._draft_penalty(patched_lint, patched_contract)
+
+            current_prose, lint_report, contract_report = (
+                patched_prose, patched_lint, patched_contract
+            )
+            if penalty < best[0]:
+                best = (penalty, patched_prose, patched_lint, patched_contract)
+
+        # 回退到全过程中质量最高的一版
+        if best[0] < self._draft_penalty(lint_report, contract_report):
+            current_prose, lint_report, contract_report = best[1], best[2], best[3]
+            feedback_history.append(
+                "补丁反而引入了更多问题，已回退到本节拍质量最高的一版"
             )
 
         if not contract_report.passed:
@@ -1251,9 +1312,12 @@ class NovelFactoryOrchestrator:
 
         # 把大纲的冲突与钩子注入首尾节拍，让契约真正承载剧情意图
         if beats and conflict:
+            # 大纲里由作者写下的核心冲突是【必达】的，
+            # 与自动分解出的结构模板事件区别对待
             beats[0].micro_events.append(MicroEvent(
                 event_id=f"ch{chapter_index:04d}_conflict",
                 description=conflict,
+                must_accomplish=True,
             ))
         if beats and hook:
             beats[-1].post_conditions.append(hook)

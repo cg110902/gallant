@@ -87,7 +87,7 @@ def test_export_to_markdown_with_toc(populated_repo):
 
 
 def test_export_to_sft_jsonl_dataset(populated_repo):
-    """测试大模型微调 SFT 数据集 (ShareGPT 格式) 自动沉淀"""
+    """OpenAI messages 格式的 SFT 数据集"""
     repo, graph = populated_repo
     exporter = ManuscriptExporter(repo=repo, graph=graph)
 
@@ -95,7 +95,7 @@ def test_export_to_sft_jsonl_dataset(populated_repo):
         tmp_jsonl = f.name
 
     try:
-        count = exporter.export_to_jsonl_dataset(tmp_jsonl, format_style="sharegpt")
+        count = exporter.export_to_jsonl_dataset(tmp_jsonl, format_style="openai")
         assert count == 2
 
         with open(tmp_jsonl, "r", encoding="utf-8") as f:
@@ -154,3 +154,38 @@ def test_export_world_bible_handles_empty_graph(tmp_path):
     assert n > 0
     assert "尚无任何实体" in out.read_text(encoding="utf-8")
     r.close()
+
+
+def test_sharegpt_format_uses_conversations_schema(populated_repo, tmp_path):
+    """
+    此前 format_style='sharegpt' 却输出 OpenAI 的 messages 字段。
+    直接喂给按 ShareGPT 解析的训练脚本会全量丢样本——格式名必须与结构一致。
+    """
+    repo, graph = populated_repo
+    exporter = ManuscriptExporter(repo=repo, graph=graph)
+    out = tmp_path / "sharegpt.jsonl"
+
+    exporter.export_to_jsonl_dataset(str(out), format_style="sharegpt")
+    items = [json.loads(l) for l in out.read_text(encoding="utf-8").splitlines()]
+
+    assert "conversations" in items[0]
+    assert "messages" not in items[0]
+    roles = [m["from"] for m in items[0]["conversations"]]
+    assert roles == ["system", "human", "gpt"]
+    assert all("value" in m for m in items[0]["conversations"])
+
+
+def test_only_passed_filters_rejected_chapters(populated_repo, tmp_path):
+    """把没过质检的稿子喂进微调数据，等于主动污染数据飞轮"""
+    repo, graph = populated_repo
+    with repo.conn:
+        repo.conn.execute(
+            "UPDATE commits SET qc_metrics_json = ? WHERE chapter_index = 1",
+            (json.dumps({"chapter_qc_passed": False}),),
+        )
+    exporter = ManuscriptExporter(repo=repo, graph=graph)
+
+    out_all = tmp_path / "all.jsonl"
+    out_ok = tmp_path / "ok.jsonl"
+    assert exporter.export_to_jsonl_dataset(str(out_all)) == 2
+    assert exporter.export_to_jsonl_dataset(str(out_ok), only_passed=True) == 1

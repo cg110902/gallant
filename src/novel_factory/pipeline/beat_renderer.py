@@ -17,6 +17,7 @@ class BeatRenderer:
         scene_beat: BeatContract,
         dynamic_ban_list: Optional[List[str]] = None,
         style_notes: Optional[str] = None,
+        character_names: Optional[Dict[str, str]] = None,
         governance_directives: Optional[List[str]] = None,
         persona_block: str = "",
         time_anchor_line: str = ""
@@ -46,6 +47,19 @@ class BeatRenderer:
         if dynamic_ban_list:
             prohibitions.append(f"跨章高频疲劳词动态禁令: 严禁出现 {', '.join(dynamic_ban_list[:10])}")
 
+        # 3.5 在场角色名单。
+        #     契约审计会以"幽灵串场"惩罚未在场角色的出现，
+        #     但此前 Prompt 从不声明谁在场——模型根本无从遵守。
+        names = character_names or {}
+        presence_lines = []
+        for cid in scene_beat.characters_present:
+            display = names.get(cid)
+            presence_lines.append(f"- {display}（{cid}）" if display else f"- {cid}")
+        presence_block = (
+            chr(10).join(presence_lines) if presence_lines
+            else "- （本节拍无具名角色，仅环境描写）"
+        )
+
         # 4. 长程治理指令（伏笔回收/爽点调度/支线续更/人设声纹/时间锚点）
         gov_parts: List[str] = []
         if time_anchor_line:
@@ -73,6 +87,9 @@ class BeatRenderer:
 - 叙事节奏: {scene_beat.pacing_type.value}
 - 目标字数区间: 约 {scene_beat.target_words} 字
 - 场景氛围: {scene_beat.scene_atmosphere or '默认当前环境'}
+
+【本节拍在场角色（只有这些人可以说话与行动）】:
+{presence_block}
 
 【必须覆盖的镜头机位】:
 {chr(10).join(camera_guides)}

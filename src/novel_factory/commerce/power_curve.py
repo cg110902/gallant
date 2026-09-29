@@ -195,15 +195,33 @@ class PowerCurveGuard:
             report.violations.append(tier_violation)
 
         # 4. 威胁度：还有没有对手
+        #    注意区分"反派很弱"与"反派没有数据"——后者是采样缺失，
+        #    据此报"再无对手"是误报。实测中它会在每一章都刷一条 ERROR。
         strongest = 0.0
+        sampled_antagonists = 0
         for aid in self.antagonist_ids:
             p = self.get_power_at(aid, chapter_index)
             if p is not None:
+                sampled_antagonists += 1
                 strongest = max(strongest, p)
         report.strongest_antagonist_power = strongest
-        if report.protagonist_power > 0:
+
+        if self.antagonist_ids and sampled_antagonists == 0:
+            report.threat_ratio = 1.0
+            report.violations.append(PowerCurveViolation(
+                violation_type="ANTAGONIST_POWER_UNSAMPLED",
+                severity="WARNING",
+                chapter_index=chapter_index,
+                entity_id=pid,
+                message=(
+                    f"已登记 {len(self.antagonist_ids)} 名反派，但均无战力采样，"
+                    f"无法评估威胁度。请在 StateDelta 中同步登记反派战力。"
+                ),
+                suggestion="为反派实体补充 power_rating 变更，否则升级节奏无从校验。",
+            ))
+        elif report.protagonist_power > 0 and sampled_antagonists > 0:
             report.threat_ratio = round(strongest / report.protagonist_power, 3)
-            if self.antagonist_ids and report.threat_ratio < self.min_threat_ratio:
+            if report.threat_ratio < self.min_threat_ratio:
                 report.violations.append(PowerCurveViolation(
                     violation_type="NO_CREDIBLE_THREAT",
                     severity="ERROR",

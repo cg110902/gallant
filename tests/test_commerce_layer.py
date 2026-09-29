@@ -56,11 +56,40 @@ def test_strong_cliffhanger_is_recognized():
 
 
 def test_dialogue_ending_punctuation_is_seen_through_quotes():
-    """以台词收尾时，闭合引号不得掩盖真正的句末标点"""
+    """
+    以台词收尾时，闭合引号不得掩盖真正的句末标点。
+    两者都必须识别出悬问型钩子；台词收尾额外加分（断章张力更足）。
+    """
     enforcer = HookEnforcer()
     with_quote = enforcer.evaluate(1, "身影走出。\n「你以为你杀的真是他？」")
     without_quote = enforcer.evaluate(2, "身影走出。\n你以为你杀的真是他？")
-    assert with_quote.score == pytest.approx(without_quote.score)
+
+    assert HookType.UNANSWERED_QUESTION in with_quote.hook_types
+    assert HookType.UNANSWERED_QUESTION in without_quote.hook_types
+    assert with_quote.score >= without_quote.score
+
+
+def test_structural_hook_is_recognised_without_keywords():
+    """
+    实测发现的标定失败：「你以为你杀的真是他？」是教科书级反转钩子，
+    纯关键词匹配却给 0 分判 DEAD。悬念由句式结构承载，不只是词汇。
+    """
+    enforcer = HookEnforcer()
+    ev = enforcer.evaluate(
+        1,
+        "裴照抬手拨开挡路的铁架。\n"
+        "零号把解码器按在桌面上，指节抵着桌沿。\n"
+        "身后传来一声轻笑：「你以为你杀的真是他？」"
+    )
+    assert ev.strength in (HookStrength.SOLID, HookStrength.STRONG)
+    assert ev.passed is True
+
+
+def test_flat_statement_ending_is_still_dead():
+    """结构性加分不能宽松到让平铺直叙的收尾也及格"""
+    enforcer = HookEnforcer()
+    ev = enforcer.evaluate(1, "他把刀擦干净，插回鞘里。")
+    assert ev.strength == HookStrength.DEAD
 
 
 def test_weak_streak_triggers_trend_alert():
@@ -363,3 +392,55 @@ def test_power_spike_via_state_delta_is_caught_by_governance():
     assert res.governance.power.passed is False
     assert any("升级节奏" in b for b in res.blockers)
     orch.close()
+
+
+def test_unsampled_antagonists_is_warning_not_error():
+    """
+    实测发现的误报：登记了反派但没有战力采样时，
+    引擎在每一章都刷「再无对手」ERROR。无数据 ≠ 无对手。
+    """
+    guard = PowerCurveGuard()
+    guard.set_protagonist("mc")
+    guard.register_antagonist("boss")      # 只登记，不采样
+    guard.record(1, "mc", 500)
+
+    report = guard.check(1)
+    types = {v.violation_type: v.severity for v in report.violations}
+    assert "NO_CREDIBLE_THREAT" not in types
+    assert types.get("ANTAGONIST_POWER_UNSAMPLED") == "WARNING"
+    assert report.passed is True
+
+
+def test_real_weak_antagonist_still_errors():
+    """有采样且确实很弱时，仍必须报错"""
+    guard = PowerCurveGuard()
+    guard.set_protagonist("mc")
+    guard.register_antagonist("boss")
+    guard.record(1, "mc", 1000)
+    guard.record(1, "boss", 100)
+
+    report = guard.check(1)
+    assert report.passed is False
+    assert any(v.violation_type == "NO_CREDIBLE_THREAT" for v in report.violations)
+
+
+@pytest.mark.parametrize("tail,expect_pass", [
+    # 单一强钩子必须能独立及格（早期权重低于及格线，导致永远不合格）
+    ("他的左手开始抽搐——刀锋已经抵住了裴照的咽喉。", True),
+    ("零号忽然明白，那个人根本没有死。", True),
+    ("身后传来一声轻笑：「你以为你杀的真是他？」", True),
+    ("所有人的目光转向门口。\n门开了，进来的人不该出现在这里。", True),
+    # 以下必须仍然不合格，标定放宽不能放宽到把平庸收尾也放行
+    ("战斗结束了。\n他转身离开，一切都平静下来。", False),
+    ("他终于懂得，人生就是一场修行。", False),
+    ("他把刀擦干净，插回鞘里。", False),
+    ("雨水顺着铁皮檐口连成一道水帘。远处传来警笛。", False),
+])
+def test_hook_threshold_calibration(tail, expect_pass):
+    """
+    钩子评分标定回归。
+    标定原则：单独一个强钩子就应当及格；平庸与说教收尾必须判死。
+    这些用例来自 30 章离线实产的真实章末文本。
+    """
+    ev = HookEnforcer().evaluate(1, tail)
+    assert ev.passed is expect_pass, f"{tail[:20]} -> {ev.strength.value} {ev.score}"

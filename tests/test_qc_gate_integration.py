@@ -325,3 +325,107 @@ def test_re_registering_entity_is_idempotent():
     orch.register_entity("char_a", "CHARACTER", "零号", created_chapter=1)
     assert len(orch.graph.list_entities(entity_type="CHARACTER")) == 1
     orch.close()
+
+
+# ---------- 漏洞 7：补丁越打越差 ----------
+
+def test_patch_loop_never_degrades_the_draft():
+    """
+    打补丁是一次完整再生成，完全可能改出更多问题。
+    实测出现过「补丁前 0+1 处违规，补丁后 2+2 处」的倒退。
+    修复动作绝不允许降低质量：循环必须回退到全过程最优版本。
+    """
+    good_first = (
+        "他的指尖压在刀刃上，指节泛白。\n"
+        "远处的长街在雨里扭曲成一片模糊。\n"
+        "他心里飞快盘算着退路。\n"
+    ) * 4
+    # 补丁版更糟：塞进禁用套话 + 说教
+    worse_patch = good_first + "\n这一幕让他深深明白，弱肉强食才是永恒的真理。"
+
+    calls = {"n": 0}
+
+    def writer(sys_p, user_p):
+        calls["n"] += 1
+        return good_first if calls["n"] == 1 else worse_patch
+
+    orch = NovelFactoryOrchestrator(
+        db_path=":memory:", llm_worker=writer, enforce_governance=False
+    )
+    orch.register_entity("char_a", "CHARACTER", "零号", created_chapter=1)
+    beat = _beat(
+        characters_present=["char_a"], target_words=300,
+        micro_events=[MicroEvent(event_id="e", description="指尖压在刀刃上")],
+    )
+
+    result = orch.produce_beat(1, beat, lore_entries=[], max_patch_retries=2)
+
+    assert "深深明白" not in result.prose, "不得保留质量更差的补丁版本"
+    assert any("回退到本节拍质量最高的一版" in f for f in result.feedback_history)
+    orch.close()
+
+
+def test_patch_loop_keeps_an_improving_patch():
+    """补丁确实改好了就必须采纳，不能一律回退"""
+    bad_first = "他笑了笑。\n这一幕让他深深明白，弱肉强食才是永恒的真理。"
+    good_patch = (
+        "他的指尖压在刀刃上，指节泛白。\n"
+        "远处的长街在雨里扭曲成一片模糊。\n"
+        "他心里飞快盘算着退路。\n"
+    ) * 4
+
+    calls = {"n": 0}
+
+    def writer(sys_p, user_p):
+        calls["n"] += 1
+        return bad_first if calls["n"] == 1 else good_patch
+
+    orch = NovelFactoryOrchestrator(
+        db_path=":memory:", llm_worker=writer, enforce_governance=False
+    )
+    orch.register_entity("char_a", "CHARACTER", "零号", created_chapter=1)
+    beat = _beat(
+        characters_present=["char_a"], target_words=300,
+        micro_events=[MicroEvent(event_id="e", description="指尖压在刀刃上")],
+    )
+
+    result = orch.produce_beat(1, beat, lore_entries=[], max_patch_retries=2)
+    assert "指尖压在刀刃上" in result.prose
+    assert "深深明白" not in result.prose
+    orch.close()
+
+
+def test_patch_prompt_carries_the_full_contract():
+    """
+    补丁是一次完整再生成，契约信息每漏一项，补丁就可能毁掉初稿的一项合规。
+    实测已踩过三次：微事件、在场角色、叙事节奏各丢过一次，
+    最后一次导致补丁版本把章末钩子整个弄没了。
+    """
+    captured = []
+
+    def spy(sys_p, user_p):
+        captured.append(user_p)
+        return "他笑了笑。"            # 故意不合格，逼出补丁
+
+    orch = NovelFactoryOrchestrator(
+        db_path=":memory:", llm_worker=spy, enforce_governance=False
+    )
+    orch.register_entity("char_a", "CHARACTER", "零号", created_chapter=1)
+    beat = BeatContract(
+        beat_id="ch01_b04", chapter_index=1, beat_index=4, target_words=600,
+        pacing_type=PacingType.CLIFFHANGER_HOOK,
+        required_camera_angles=[CameraAngle.POV, CameraAngle.REACTION_CAM],
+        characters_present=["char_a"], location_id="loc",
+        micro_events=[MicroEvent(event_id="e", description="零号夺回染血的芯片")],
+        post_conditions=["陌生身影从雨里走出"],
+    )
+    orch.produce_beat(1, beat, lore_entries=[], max_patch_retries=1)
+
+    patch_prompt = captured[-1]
+    assert "局部微创打补丁任务" in patch_prompt
+    assert "零号夺回染血的芯片" in patch_prompt, "补丁必须携带微事件清单"
+    assert "零号" in patch_prompt, "补丁必须携带在场角色"
+    assert "CLIFFHANGER_HOOK" in patch_prompt, "补丁必须携带叙事节奏"
+    assert "陌生身影从雨里走出" in patch_prompt, "补丁必须携带须兑现的章末悬念"
+    assert "POV" in patch_prompt, "补丁必须携带机位要求"
+    orch.close()

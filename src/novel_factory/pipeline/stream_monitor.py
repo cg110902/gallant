@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 import re
-from typing import AsyncGenerator, Generator, Iterable, List, Optional, Tuple
+from typing import Any, AsyncGenerator, Callable, Dict, Generator, Iterable, List, Optional, Set, Tuple
 
 
 class DegenerationType(str, Enum):
@@ -39,13 +39,31 @@ class StreamMonitor:
         min_loop_phrase_length: int = 5,
         max_allowed_repetitions: int = 3,
         max_character_runaway: int = 10,
-        sliding_window_size: int = 120
+        sliding_window_size: int = 120,
+        protected_terms: Optional[Iterable[str]] = None,
+        protected_ngram_multiplier: float = 2.5
     ):
         self.min_loop_len = min_loop_phrase_length
         self.max_reps = max_allowed_repetitions
         self.max_char_runaway = max_character_runaway
         self.sliding_window_size = sliding_window_size
+        # 专有名词白名单（角色名/地名/物品名）。
+        # 四字角色名在 120 字内出现四次，在中文网文里是完全正常的对戏密度，
+        # 早期实现会把它判成"退化重复"并直接截断正文——真实模型输出同样会被误杀。
+        self.protected_terms: Set[str] = set(protected_terms or [])
+        self.protected_ngram_multiplier = protected_ngram_multiplier
         self.buffer: str = ""
+
+    def set_protected_terms(self, terms: Iterable[str]) -> None:
+        """更新专有名词白名单（通常来自 BEC 图谱的实体花名册）"""
+        self.protected_terms = set(t for t in terms if t)
+
+    def _is_protected(self, ngram: str) -> bool:
+        """该 n-gram 是否是专有名词的一部分"""
+        for term in self.protected_terms:
+            if len(term) >= 2 and (ngram in term or term in ngram):
+                return True
+        return False
 
     def reset(self):
         """重置内部缓冲区"""
@@ -126,7 +144,15 @@ class StreamMonitor:
             ngrams = [window_text[i:i+ngram_len] for i in range(len(window_text) - ngram_len + 1)]
             counts = Counter(ngrams)
             for ng, cnt in counts.items():
-                if cnt >= 4 and not ng.isspace() and not re.match(r"^[\s，。、]+$", ng):
+                if ng.isspace() or re.match(r"^[\s，。、]+$", ng):
+                    continue
+                # 专有名词放宽阈值而不是完全豁免：
+                # 名字复读到离谱程度仍然是退化，只是判定线更高。
+                limit = (
+                    int(4 * self.protected_ngram_multiplier)
+                    if self._is_protected(ng) else 4
+                )
+                if cnt >= limit:
                     return StreamChunkResult(
                         chunk_text=chunk,
                         is_aborted=True,

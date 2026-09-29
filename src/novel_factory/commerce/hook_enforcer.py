@@ -44,7 +44,8 @@ HOOK_SIGNATURES: Dict[HookType, List[str]] = {
     ],
     HookType.INFORMATION_BOMB: [
         "竟然是", "原来", "真相", "身世", "真正的", "从来不是", "一直都是",
-        "秘密", "真名", "根本不是", "另有其人",
+        "秘密", "真名", "根本不是", "另有其人", "才是", "还活着", "并没有死",
+        "你杀的", "本该", "早就死了", "没有死", "没死", "活着回来", "另一个人",
     ],
     HookType.REVERSAL: [
         "然而", "可是就在", "却在此时", "反手", "早已", "布局", "中计",
@@ -52,6 +53,7 @@ HOOK_SIGNATURES: Dict[HookType, List[str]] = {
     ],
     HookType.UNANSWERED_QUESTION: [
         "是谁", "为什么", "怎么会", "难道", "究竟", "到底", "何人", "什么东西",
+        "你以为", "真的是", "不是吗", "会是",
     ],
     HookType.PROMISE: [
         "三天后", "明日", "即将", "就要", "马上", "倒计时", "大战一触即发",
@@ -63,7 +65,8 @@ HOOK_SIGNATURES: Dict[HookType, List[str]] = {
     ],
     HookType.NEW_ENTRANT: [
         "一道身影", "一个声音", "陌生", "不速之客", "推门而入", "拦住去路",
-        "缓缓走出", "从天而降", "现身",
+        "缓缓走出", "从天而降", "现身", "不该出现", "门开了", "走了进来",
+        "出现在门口", "本不该",
     ],
 }
 
@@ -73,6 +76,9 @@ ANTI_HOOK_SIGNATURES: List[str] = [
     "尘埃落定", "从此", "再也没有", "圆满", "回到了", "转身离开", "安然入睡",
     "这一夜格外平静", "故事就这样",
 ]
+
+# 章末台词：以角色的话收尾是最常见的断章手法
+_DIALOGUE_TAIL_RE = re.compile(r"[“「『\"][^”」』\"]{2,120}[”」』\"]\s*$")
 
 # 说教型收尾：网文读者最反感，强制判 DEAD
 MORALIZING_TAILS: List[str] = [
@@ -152,13 +158,17 @@ class HookEnforcer:
             if any(s in tail for s in sigs):
                 ev.hook_types.append(htype)
 
-        # 类型加权：危机与反转是最强驱动
+        # 类型加权。
+        # 标定原则：【单独一个强钩子就应当及格】。
+        # 早期权重最高只有 4.0，而及格线是 5.0，于是"刀锋已经抵住咽喉"
+        # 这种教科书级危机钩子单独出现时永远判不及格——这是标定错误，
+        # 而不是内容问题。现将三类主力钩子提到及格线之上。
         weights = {
-            HookType.CLIFFHANGER_DANGER: 4.0,
-            HookType.REVERSAL: 3.5,
-            HookType.INFORMATION_BOMB: 3.5,
-            HookType.NEW_ENTRANT: 3.0,
-            HookType.UNANSWERED_QUESTION: 2.5,
+            HookType.CLIFFHANGER_DANGER: 5.0,
+            HookType.REVERSAL: 4.5,
+            HookType.INFORMATION_BOMB: 4.5,
+            HookType.NEW_ENTRANT: 4.0,
+            HookType.UNANSWERED_QUESTION: 3.0,
             HookType.PROMISE: 2.0,
             HookType.EMOTIONAL_SPIKE: 1.5,
         }
@@ -166,19 +176,41 @@ class HookEnforcer:
             score += weights.get(t, 0.0)
         score = min(score, 9.0)
 
-        # 2. 结构性加分：以短句/独立行收尾是网文标准手法
+        # 2. 结构性钩子识别
+        #    纯关键词匹配会漏掉大量真实钩子。实测中
+        #    「你以为你杀的真是他？」这种教科书级反转被判 0 分——
+        #    因为它不含任何关键词。悬念是由【句式结构】承载的，不只是词汇。
         last_line = tail.split("\n")[-1]
         # 以台词收尾时，闭合引号会掩盖真正的句末标点，须先剥离
         core_last = last_line.rstrip("”」』\"'）)")
+        is_dialogue_end = bool(_DIALOGUE_TAIL_RE.search(last_line))
+
+        if core_last.endswith(("？", "?")):
+            # 章末抛出一个未解答的问题，本身就是悬问型钩子
+            if HookType.UNANSWERED_QUESTION not in ev.hook_types:
+                ev.hook_types.append(HookType.UNANSWERED_QUESTION)
+                score += 3.0
+            ev.reasons.append("以疑问句收尾，抛出未解答的问题")
+        elif core_last.endswith(("！", "!")):
+            score += 0.8
+            ev.reasons.append("以感叹收尾，情绪外扩")
+
+        if core_last.endswith(("……", "…", "—", "——")):
+            if HookType.UNANSWERED_QUESTION not in ev.hook_types:
+                ev.hook_types.append(HookType.UNANSWERED_QUESTION)
+                score += 1.5
+            ev.reasons.append("以省略/破折收尾，留白悬置")
+
+        if is_dialogue_end:
+            # 把最后一句留给角色说，是网文最常见的断章手法
+            score += 1.5
+            ev.reasons.append("以未作答的台词收尾，断章张力足")
+
         if len(last_line) <= 25:
             score += 1.0
             ev.reasons.append("结尾为短促独立行，节奏干脆")
-        if core_last.endswith(("？", "?", "！", "!")):
-            score += 0.5
-            ev.reasons.append("以疑问/感叹收尾，情绪外扩")
-        if core_last.endswith(("……", "…", "—", "——")):
-            score += 0.5
-            ev.reasons.append("以省略/破折收尾，留白悬置")
+
+        score = min(score, 9.5)
 
         # 3. 反钩子扣分
         for anti in ANTI_HOOK_SIGNATURES:

@@ -237,10 +237,35 @@ print(result.governance.format_summary())
 
 ---
 
+## 无 API Key 的离线实产
+
+仓库自带一个**确定性离线写手**（`llm/offline_writer.py`）。它不是语言模型，
+而是一个严格按节拍契约拼装中文正文的程序化写手，用来在没有 Key 的情况下
+跑通全链路、做 CI 回归，以及**给质检闸门做标定自检**：
+如果一个严格照契约写作的写手都通不过质检，那是闸门标定有问题，不是内容有问题。
+
+```bash
+python scripts/build_sample_book.py sample_book/outline.yaml   # 40 章样板书大纲
+python scripts/run_production.py --workdir sample_book --end 30
+```
+
+**实测结果（30 章 / 85,191 字 / 18 秒 / ¥0.092）**
+
+| 指标 | 结果 |
+|---|---|
+| 一次通过率 | 16/30 = 53%（被拦的 14 章：跨章雷同 + 钩子偏弱，均为写手模板池有限所致） |
+| 章末钩子分布 | STRONG 17 / SOLID 9 / WEAK 4 / DEAD 0，均分 7.53 |
+| 跨章相似度 | 中位 75.0% / p90 82.8% / 判定线 85.0%，命中率 6.4% |
+| 伏笔台账 | 5 条全部自动检出复述，0 条超期 |
+| 长程治理 | 时间线、人设、命名全 PASS；正确告警「支线未按期收束」「15 章无爽点兑现」 |
+| 导出 | 投稿 TXT 26 万字符 / Markdown / SFT 30 条 / 世界观设定集 |
+
+这一轮实产暴露并修复了 8 个真实缺陷，详见下节。
+
 ## 测试与压测
 
 ```bash
-pytest -q                                              # 301 项单元与集成测试
+pytest -q                                              # 334 项单元与集成测试
 
 python scripts/stress_test.py --chapters 100 --crash-at 60
 ```

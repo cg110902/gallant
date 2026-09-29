@@ -108,40 +108,66 @@ class ManuscriptExporter:
     def export_to_jsonl_dataset(
         self,
         output_file_path: str,
-        format_style: str = "sharegpt"  # sharegpt or raw
+        format_style: str = "openai",     # openai / sharegpt / raw
+        only_passed: bool = False
     ) -> int:
         """
-        导出为大模型 SFT 微调数据格式 (JSONL)
-        自动沉淀优质训练样本，构建数据飞轮
+        导出为大模型 SFT 微调数据格式 (JSONL)，沉淀训练样本构建数据飞轮。
+
+        格式区分（此前把两者混为一谈：声称 sharegpt 却输出 openai 的 messages 字段，
+        直接喂给按 ShareGPT 解析的训练脚本会全量丢样本）：
+          - openai   : {"messages": [{"role", "content"}]}
+          - sharegpt : {"conversations": [{"from", "value"}]}
+          - raw      : 原始章节字段
+
+        only_passed=True 时只导出质检放行的章节——
+        把没过质检的稿子喂进微调数据，等于主动污染数据飞轮。
         """
         chapters = self.get_all_chapters()
+        if only_passed:
+            kept = []
+            for ch in chapters:
+                try:
+                    m = json.loads(ch.get("qc_metrics_json") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    m = {}
+                if m.get("chapter_qc_passed", True):
+                    kept.append(ch)
+            chapters = kept
         dataset_count = 0
         Path(output_file_path).parent.mkdir(parents=True, exist_ok=True)
 
         with open(output_file_path, "w", encoding="utf-8") as f:
             for ch in chapters:
+                system_text = (
+                    "你是一名工业级网文主笔作家，严格遵循机位调度与微事件推进，杜绝空洞说教。"
+                )
+                user_text = f"请为小说创作章节【{ch['title']}】的正文内容。"
+                meta = {
+                    "chapter_index": ch["chapter_index"],
+                    "word_count": ch["word_count"],
+                    "qc_metrics": json.loads(ch.get("qc_metrics_json") or "{}"),
+                }
+
                 if format_style == "sharegpt":
                     item = {
                         "id": f"novel_factory_{ch['commit_id'][:10]}",
-                        "messages": [
-                            {
-                                "role": "system",
-                                "content": "你是一名工业级网文主笔作家，严格遵循机位调度与微事件推进，杜绝空洞说教。"
-                            },
-                            {
-                                "role": "user",
-                                "content": f"请为小说创作章节【{ch['title']}】的正文内容。"
-                            },
-                            {
-                                "role": "assistant",
-                                "content": ch["full_prose"]
-                            }
+                        "conversations": [
+                            {"from": "system", "value": system_text},
+                            {"from": "human", "value": user_text},
+                            {"from": "gpt", "value": ch["full_prose"]},
                         ],
-                        "metadata": {
-                            "chapter_index": ch["chapter_index"],
-                            "word_count": ch["word_count"],
-                            "qc_metrics": json.loads(ch.get("qc_metrics_json") or "{}")
-                        }
+                        "metadata": meta,
+                    }
+                elif format_style == "openai":
+                    item = {
+                        "id": f"novel_factory_{ch['commit_id'][:10]}",
+                        "messages": [
+                            {"role": "system", "content": system_text},
+                            {"role": "user", "content": user_text},
+                            {"role": "assistant", "content": ch["full_prose"]},
+                        ],
+                        "metadata": meta,
                     }
                 else:
                     item = {
