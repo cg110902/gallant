@@ -97,3 +97,21 @@ def test_clean_universal_text_passes_lint():
     assert report.passed is True
     assert report.total_errors == 0
     assert report.score >= 90.0
+
+
+def test_ast_parsing_and_tail_moralizer_pruning():
+    """测试 AST 解析与段尾说教剪枝器"""
+    linter = MechanicalLinter()
+    
+    text_with_sermon = (
+        "林动一拳砸穿石壁，碎屑飞溅。\n"
+        "这一幕让他深深明白弱肉强食才是立足的根本。\n\n"
+        "小貂在半空中翻了个筋斗。\n"
+        "殊不知，这不过是命运的齿轮刚刚开始转动。"
+    )
+    
+    cleaned, pruned_count = linter.prune_tail_moralizers(text_with_sermon)
+    assert pruned_count >= 1
+    assert "这一幕让他深深明白" not in cleaned
+    assert "林动一拳砸穿石壁，碎屑飞溅。" in cleaned
+

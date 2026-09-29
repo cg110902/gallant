@@ -1,13 +1,18 @@
 """
-Mechanical Linter - 数据与配置驱动的高精度纯机制机械质检引擎 (Configuration-Driven)
+Mechanical Linter - 数据与配置驱动的高精度纯机制机械质检与语法树剪枝引擎 (Config-Driven AST)
 核心代码严禁硬编码任何题材特定文本或文学性判断；所有检测规则、阈值与扣分逻辑均通过 YAML 配置动态加载。
+特性：
+1. AST 语法树解析 (Document -> Paragraph -> Sentence)；
+2. 零议论反说教 AST 段尾修剪器 (prune_tail_moralizers)；
+3. 移动端脉冲流排版检验 (Mobile Pulse Flow & Isolated Climax Line)；
+4. 题材专属套话与黑名单动态加载 (Genre Rules Loader)。
 """
 
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import yaml
 
 
@@ -70,9 +75,89 @@ class LintReport:
         return "\n".join(lines)
 
 
+# ================== AST 结构定义 ==================
+
+@dataclass
+class SentenceAST:
+    sentence_index: int
+    raw_text: str
+    is_dialogue: bool = False
+    ending_punctuation: str = "。"
+
+
+@dataclass
+class ParagraphAST:
+    paragraph_index: int
+    raw_text: str
+    sentences: List[SentenceAST] = field(default_factory=list)
+
+    @property
+    def sentence_count(self) -> int:
+        return len(self.sentences)
+
+    @property
+    def is_isolated_line(self) -> bool:
+        """是否为单句孤立行（常用于核心高潮、反转或重击）"""
+        return self.sentence_count == 1 and len(self.raw_text.strip()) <= 45
+
+
+@dataclass
+class DocumentAST:
+    paragraphs: List[ParagraphAST] = field(default_factory=list)
+
+    @classmethod
+    def parse_from_text(cls, text: str) -> "DocumentAST":
+        """将纯文本正文解析为 AST 树"""
+        doc = cls()
+        lines = text.split("\n")
+        para_idx = 0
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+
+            para_idx += 1
+            # 切分句子
+            raw_sentences = [s.strip() for s in re.split(r"([。！？!?…]+)", line_str) if s.strip()]
+            sentences: List[SentenceAST] = []
+            
+            # 配对句子与标点
+            i = 0
+            sent_idx = 0
+            while i < len(raw_sentences):
+                s_text = raw_sentences[i]
+                punct = "。"
+                if i + 1 < len(raw_sentences) and re.match(r"^[。！？!?…]+$", raw_sentences[i+1]):
+                    punct = raw_sentences[i+1]
+                    i += 2
+                else:
+                    i += 1
+
+                sent_idx += 1
+                full_sent = s_text + punct
+                is_dial = (full_sent.startswith("“") or full_sent.startswith('"'))
+                sentences.append(SentenceAST(
+                    sentence_index=sent_idx,
+                    raw_text=full_sent,
+                    is_dialogue=is_dial,
+                    ending_punctuation=punct
+                ))
+
+            doc.paragraphs.append(ParagraphAST(
+                paragraph_index=para_idx,
+                raw_text=line_str,
+                sentences=sentences
+            ))
+
+        return doc
+
+
+# ================== 核心 Linter ==================
+
 class MechanicalLinter:
     """
-    配置驱动的通用机械质检引擎
+    配置驱动的通用机械质检与语法树剪枝引擎
     代码本身是中立的规则执行器，一切行为由传入的配置文件决定
     """
 
@@ -98,12 +183,13 @@ class MechanicalLinter:
                 self.load_rules(cfg)
         else:
             # 自动探测加载默认配置目录 configs/rules/
-            default_rule_file = Path(__file__).resolve().parents[3] / "configs" / "rules" / "anti_slop.yaml"
-            if default_rule_file.exists():
-                self.load_rules(default_rule_file)
+            default_rules_dir = Path(__file__).resolve().parents[3] / "configs" / "rules"
+            if default_rules_dir.exists():
+                for yaml_file in default_rules_dir.glob("*.yaml"):
+                    self.load_rules(yaml_file)
 
     def load_rules(self, source: Union[str, Path, Dict[str, Any]]) -> None:
-        """从文件或字典加载声明式质检规则"""
+        """从文件路径或直接字典加载规则"""
         if isinstance(source, (str, Path)):
             with open(source, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
@@ -134,6 +220,46 @@ class MechanicalLinter:
                     enabled=True
                 )
             )
+
+    def prune_tail_moralizers(self, text: str) -> Tuple[str, int]:
+        """
+        基于 AST 语法树剪枝：
+        自动扫描每个段落末尾。若末尾句子命中 ZERO_MORALIZER 说教规则，直接干净剪除，保留前段动作句子。
+        返回: (修剪后的文本, 修剪句子数)
+        """
+        doc = DocumentAST.parse_from_text(text)
+        moralizer_rules = [r for r in self.rules if r.category == "ZERO_MORALIZER" and r.enabled]
+        
+        pruned_count = 0
+        cleaned_paragraphs = []
+
+        for para in doc.paragraphs:
+            if not para.sentences:
+                cleaned_paragraphs.append(para.raw_text)
+                continue
+
+            last_sentence = para.sentences[-1]
+            is_moralizer = False
+
+            for rule in moralizer_rules:
+                if rule.get_compiled().search(last_sentence.raw_text):
+                    is_moralizer = True
+                    break
+
+            if is_moralizer and len(para.sentences) > 1:
+                # 剔除末尾说教句，保留前面的动作句
+                remaining = para.sentences[:-1]
+                pruned_para_text = "".join(s.raw_text for s in remaining)
+                cleaned_paragraphs.append(pruned_para_text)
+                pruned_count += 1
+            elif is_moralizer and len(para.sentences) == 1:
+                # 整段就一句说教，直接整段剔除
+                pruned_count += 1
+                continue
+            else:
+                cleaned_paragraphs.append(para.raw_text)
+
+        return "\n\n".join(cleaned_paragraphs), pruned_count
 
     def lint_text(self, text: str) -> LintReport:
         """基于已加载的全部规则对文本执行确定性扫描"""
