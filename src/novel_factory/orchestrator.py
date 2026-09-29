@@ -252,12 +252,16 @@ class NovelFactoryOrchestrator:
                     feedback_history.append(f"因果不变式拦截: {err_msg}")
 
         # 2. 财务预算前置哨兵（预判 2000 输入 + 800 输出 Token 是否超标）
+        writer_model = "gemini-3.8-flash"
+        if self.project_config and self.project_config.models:
+            writer_model = self.project_config.models.writer_agent
+
         try:
             self.cost_auditor.pre_check_budget(
                 chapter_index=chapter_index,
                 estimated_input_tokens=2000,
                 estimated_output_tokens=scene_beat.target_words,
-                model_name="deepseek-v3"
+                model_name=writer_model
             )
         except FinancialCircuitBreakerError as e:
             feedback_history.append(f"财务预算警报: {e}")
@@ -334,7 +338,7 @@ class NovelFactoryOrchestrator:
             self.cost_auditor.record_usage(
                 chapter_index=chapter_index,
                 beat_id=scene_beat.beat_id,
-                model_name="deepseek-v3",
+                model_name=writer_model,
                 input_tokens=in_tokens,
                 cached_input_tokens=cached_tokens,
                 output_tokens=out_tokens
@@ -346,7 +350,7 @@ class NovelFactoryOrchestrator:
         self.cost_tracker.record_usage(
             chapter_index=chapter_index,
             beat_id=scene_beat.beat_id,
-            model_name="gemini-1.5-flash",
+            model_name=writer_model,
             input_tokens=in_tokens,
             cached_input_tokens=cached_tokens,
             output_tokens=out_tokens

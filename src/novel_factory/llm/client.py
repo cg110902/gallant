@@ -128,12 +128,12 @@ class OpenAICompatibleProvider(BaseLLMProvider):
 
 
 class GeminiProvider(BaseLLMProvider):
-    """原生 Google Gemini REST 接口提供商"""
+    """原生 Google Gemini REST 接口提供商 (兼容 HTTP 直接请求)"""
 
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model_name: str = "gemini-1.5-flash",
+        model_name: str = "gemini-3.8-flash",
         timeout_seconds: float = 60.0
     ):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
@@ -189,12 +189,15 @@ class GeminiProvider(BaseLLMProvider):
 
 def get_llm_provider(
     provider_type: str = "mock",
-    model_name: str = "mock",
+    model_name: str = "gemini-3.8-flash",
     api_key: Optional[str] = None,
     base_url: Optional[str] = None
 ) -> BaseLLMProvider:
     """工厂方法创建指定的 LLM Provider"""
     if provider_type == "gemini":
+        from src.novel_factory.llm.gemini_adapter import GeminiNativeProvider
+        return GeminiNativeProvider(api_key=api_key, default_model=model_name)
+    elif provider_type == "gemini_rest":
         return GeminiProvider(api_key=api_key, model_name=model_name)
     elif provider_type in ("openai", "deepseek", "custom"):
         url = base_url or "https://api.deepseek.com/v1"

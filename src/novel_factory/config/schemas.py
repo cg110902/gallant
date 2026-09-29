@@ -79,9 +79,9 @@ class ModelRouteConfig(BaseModel):
     """
     模型路由与成本审计配置
     """
-    director_agent: str = "gemini-1.5-pro"
-    writer_agent: str = "gemini-1.5-flash"
-    judge_agent: str = "gemini-1.5-flash"
+    director_agent: str = "gemini-3.1-pro-preview"
+    writer_agent: str = "gemini-3.8-flash"
+    judge_agent: str = "gemini-3.5-flash-lite"
     enable_prompt_caching: bool = True
     cost_limit_per_chapter_cny: float = 0.40
 

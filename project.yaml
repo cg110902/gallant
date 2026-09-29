@@ -26,7 +26,7 @@ qc_pipeline:
 
 # 4. 模型路由与 Prompt 缓存策略
 models:
-  director_agent: "gemini-1.5-pro"    # 顶尖推理模型：负责细纲契约拆解与逻辑可达性
-  writer_agent: "gemini-1.5-flash"    # 高吞吐高性价比模型：负责单节拍正文渲染
-  judge_agent: "gemini-1.5-flash"     # 裁判模型：负责语义Post-conditions断言
-  enable_prompt_caching: true         # 开启常驻Codex上下文缓存（单章成本骤降75%）
+  director_agent: "gemini-3.1-pro-preview"    # 顶尖推理模型：负责细纲契约拆解与逻辑可达性 (Thinking Enabled)
+  writer_agent: "gemini-3.8-flash"            # 高吞吐高性价比模型：负责单节拍正文渲染 (1M Context, Zero Latency)
+  judge_agent: "gemini-3.5-flash-lite"        # 裁判模型：负责语义Post-conditions断言 (Ultra-fast Boolean Verification)
+  enable_prompt_caching: true                 # 开启常驻Codex上下文缓存（单章成本骤降75%）

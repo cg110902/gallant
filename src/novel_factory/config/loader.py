@@ -115,9 +115,9 @@ class ProjectConfigLoader:
         # 4. 模型路由
         models_raw = raw.get("models", {})
         models_obj = ModelRouteConfig(
-            director_agent=models_raw.get("director_agent", "gemini-1.5-pro"),
-            writer_agent=models_raw.get("writer_agent", "gemini-1.5-flash"),
-            judge_agent=models_raw.get("judge_agent", "gemini-1.5-flash"),
+            director_agent=models_raw.get("director_agent", "gemini-3.1-pro-preview"),
+            writer_agent=models_raw.get("writer_agent", "gemini-3.8-flash"),
+            judge_agent=models_raw.get("judge_agent", "gemini-3.5-flash-lite"),
             enable_prompt_caching=models_raw.get("enable_prompt_caching", True),
             cost_limit_per_chapter_cny=models_raw.get("cost_limit_per_chapter_cny", 0.40)
         )

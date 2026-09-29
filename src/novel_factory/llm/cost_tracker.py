@@ -15,8 +15,32 @@ class ModelPricing:
     price_per_1m_output: float         # 人民币 (¥) / 100万 输出 Token
 
 
-# 常用主流模型定价库 (截至2025/2026公开商业价，折合人民币CNY)
+# 常用主流模型定价库 (包含 Gemini 3.x 原生系列与主流商业模型，折合人民币CNY)
 DEFAULT_PRICING_TABLE: Dict[str, ModelPricing] = {
+    "gemini-3.8-flash": ModelPricing(
+        model_name="gemini-3.8-flash",
+        price_per_1m_input=0.50,
+        price_per_1m_cached_input=0.125,
+        price_per_1m_output=2.00
+    ),
+    "gemini-3.5-flash-lite": ModelPricing(
+        model_name="gemini-3.5-flash-lite",
+        price_per_1m_input=0.18,
+        price_per_1m_cached_input=0.045,
+        price_per_1m_output=0.70
+    ),
+    "gemini-3.1-pro-preview": ModelPricing(
+        model_name="gemini-3.1-pro-preview",
+        price_per_1m_input=8.00,
+        price_per_1m_cached_input=2.00,
+        price_per_1m_output=32.00
+    ),
+    "gemini-flash-latest": ModelPricing(
+        model_name="gemini-flash-latest",
+        price_per_1m_input=0.50,
+        price_per_1m_cached_input=0.125,
+        price_per_1m_output=2.00
+    ),
     "gemini-1.5-flash": ModelPricing(
         model_name="gemini-1.5-flash",
         price_per_1m_input=0.55,
