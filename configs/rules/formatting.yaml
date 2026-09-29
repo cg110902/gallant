@@ -1,0 +1,16 @@
+# 移动端阅读排版与标点卫生配置
+meta:
+  version: "1.0.0"
+  description: "适配手机屏幕单屏阅读与短句呼吸感的排版约束"
+
+formatting:
+  max_sentences_per_paragraph: 3
+  max_chars_per_paragraph: 150
+  enable_punchy_single_line_check: true
+  penalty_per_overflow: 4.0
+
+punctuation:
+  max_consecutive_ellipsis: 3     # 超过3个点报警
+  max_consecutive_exclamation: 1  # 连续感叹号报警
+  max_consecutive_question: 1     # 连续问号报警
+  penalty_per_violation: 2.0

@@ -1,0 +1,32 @@
+# Novel Factory 生产项目主配置文件 (Project Master Configuration)
+# 一切题材、战力、文风、质检与模型均通过声明式挂载，严禁代码硬编码
+
+project_name: "CYBER_NIGHT_2088"
+project_title: "霓虹雨夜：断线黑客的复仇纪元"
+version: "1.0.0"
+
+# 1. 题材与法则体系配置挂载
+genre:
+  config_path: "configs/genres/cyberpunk_scifi.yaml"
+  # 支持切换为: "configs/genres/xianxia_cultivation.yaml" 或 "configs/genres/suspense_mystery.yaml"
+
+# 2. 叙事节奏与心跳节拍配置挂载
+pacing:
+  config_path: "configs/pacing/webnovel_high_octane.yaml"
+  # 支持切换为: "configs/pacing/classic_three_act.yaml"
+
+# 3. 机械质检与 Anti-Slop 规则包挂载
+qc_pipeline:
+  rule_packs:
+    - "configs/rules/anti_slop.yaml"
+    - "configs/rules/formatting.yaml"
+  repetition_rules: "configs/rules/repetition.yaml"
+  auto_patch_on_failure: true
+  max_local_patch_retries: 3
+
+# 4. 模型路由与 Prompt 缓存策略
+models:
+  director_agent: "gemini-1.5-pro"    # 顶尖推理模型：负责细纲契约拆解与逻辑可达性
+  writer_agent: "gemini-1.5-flash"    # 高吞吐高性价比模型：负责单节拍正文渲染
+  judge_agent: "gemini-1.5-flash"     # 裁判模型：负责语义Post-conditions断言
+  enable_prompt_caching: true         # 开启常驻Codex上下文缓存（单章成本骤降75%）

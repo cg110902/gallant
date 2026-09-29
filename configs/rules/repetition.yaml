@@ -1,0 +1,28 @@
+# 套路去重与流口水检测阈值配置
+meta:
+  version: "1.0.0"
+  description: "检测流式生成死循环复读、词汇多样性(TTR)与跨章疲劳词熔断"
+
+drooling_detection:
+  min_loop_phrase_length: 5       # 判定为死循环重复的最短字数
+  min_loop_repetitions: 2         # 最短连续重复次数
+  streaming_hard_abort_repetitions: 3 # 流式生成时超过该次数直接 Hard Abort 截断
+
+lexical_diversity:
+  ttr_warning_threshold: 0.35    # Type-Token Ratio 报警底线
+  high_frequency_min_count: 4     # 单章高频词提取门槛
+
+cross_chapter_fatigue:
+  scan_window_chapters: 5         # 回溯扫描的前序章节数量
+  fatigue_saturation_count: 12    # 饱和阈值：前序章节内累计出现超此次数则加入下一章动态禁令表
+  # 监控的高频词库类型（按题材加载或通用）
+  fatigue_monitored_action_verbs:
+    - "冷哼"
+    - "暴喝"
+    - "惨叫"
+    - "轰出"
+    - "暴退"
+    - "嗤笑"
+    - "骇然"
+    - "狰狞"
+    - "倒吸"

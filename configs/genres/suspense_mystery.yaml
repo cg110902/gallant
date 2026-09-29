@@ -1,0 +1,36 @@
+# 悬疑推理 / 罪案刑侦 题材预设
+genre: "SUSPENSE_MYSTERY"
+name: "悬疑惊悚与连环案件"
+
+# 力量与能力标尺定义 (取代修仙境界)
+power_scale:
+  scale_name: "侦查与反侦查智力博弈标尺"
+  tiers:
+    - tier_id: "TIER_AMATEUR"
+      name: "平民/初入局者"
+      numeric_min: 10
+      numeric_max: 50
+      description: "受恐慌支配，极易在现场遗留生物物证"
+    - tier_id: "TIER_PRO"
+      name: "一线刑警/资深法医"
+      numeric_min: 50
+      numeric_max: 300
+      description: "精通痕迹检验、物证链闭环与微表情心理侧写"
+    - tier_id: "TIER_MASTERMIND"
+      name: "高智商连环案嫌犯"
+      numeric_min: 300
+      numeric_max: 1500
+      description: "擅长制造不在场证明、伪造第一现场与心理误导"
+
+# 实体关系语义扩展
+custom_relation_types:
+  - "SUSPECT_OF"         # 涉嫌参与案件
+  - "ALIBI_VERIFIED_BY"  # 不在场证明提供者
+  - "FORENSIC_LINKED_TO" # 物证指向关联
+  - "BLACKMAILED_BY"     # 被敲诈勒索关系
+
+# 题材专属禁忌
+genre_banned_cliches:
+  - "真相只有一个"
+  - "这让他深深明白凶手的可怕"
+  - "殊不知死神的镰刀已经悄然落下"

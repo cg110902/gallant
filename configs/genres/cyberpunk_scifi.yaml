@@ -1,0 +1,41 @@
+# 赛博朋克 / 近未来科幻 题材预设
+genre: "CYBERPUNK_SCIFI"
+name: "赛博朋克与企业战争"
+
+# 力量与战力标尺定义 (取代修仙境界)
+power_scale:
+  scale_name: "义体化等级与神经负荷标尺"
+  tiers:
+    - tier_id: "NATURAL_0"
+      name: "纯血自然人"
+      numeric_min: 10
+      numeric_max: 50
+      description: "无任何神经植入物，免疫电磁EMP与脑机病毒，身体机能受物理极限约束"
+    - tier_id: "CHROME_1"
+      name: "初级民用植入"
+      numeric_min: 50
+      numeric_max: 200
+      description: "基础视网膜HUD、皮下微通讯芯片、工用外骨骼接口"
+    - tier_id: "MILSPEC_2"
+      name: "军规级战术改装"
+      numeric_min: 200
+      numeric_max: 1000
+      description: "斯安威斯坦神经加速系统、皮下防弹装甲、内置单分子线"
+    - tier_id: "BORG_3"
+      name: "重度义体化/赛博死神"
+      numeric_min: 1000
+      numeric_max: 5000
+      description: "全身机械化率超80%，需大剂量免疫抑制剂，游走在赛博精神病边缘"
+
+# 实体关系语义扩展
+custom_relation_types:
+  - "EMPLOYED_BY"     # 雇佣于（巨型企业）
+  - "HACKED_BY"       # 脑机接口被黑入/后门植入
+  - "DEBT_BOUND_TO"   # 高利贷/身体零件抵押
+  - "CONTRACT_TARGET" # 赏金猎杀目标
+
+# 题材专属禁忌与套路疲劳词
+genre_banned_cliches:
+  - "眼神中闪过冷光"
+  - "宛如一台冷血的杀人机器"
+  - "不得不说这真是一座罪恶之城"

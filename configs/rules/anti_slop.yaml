@@ -1,0 +1,119 @@
+# 通用 Anti-Slop (反AI味/反说教/反套话) 声明式规则配置
+# 用户可自由添加、删除、禁用特定规则或调整扣分权重与阈值
+
+meta:
+  version: "1.0.0"
+  description: "全题材通用 AI 味、上帝视角议论与空洞连接词机械质检规则库"
+
+thresholds:
+  min_pass_score: 85.0
+  error_penalty: 8.0
+  warning_penalty: 3.0
+
+rules:
+  # 1. 零议论/反说教规则 (Zero-Moralizer) - 严禁作者借上帝视角生硬总结哲理
+  - id: "ZERO_MORALIZER_REALIZATION"
+    category: "ZERO_MORALIZER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "(?:这|此番|这一幕)(?:让|使)(?:得)?(?:他|众人|所有人)?(?:深深|深刻)?(?:明白|意识到|懂得|体会到|知晓)[^。\n]*[。\n]?"
+    message: "禁止在段落末尾以说明文口吻升华人生领悟，读者需要动作与即时结果而非说教"
+    suggestion: "删除该句，换用角色的具体微动作或现场环境声响直接过渡"
+
+  - id: "ZERO_MORALIZER_FORESHADOW_SPOILER"
+    category: "ZERO_MORALIZER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "殊不知(?:，|,)?(?:这不过|这一切|命运的齿轮|他的一举一动)[^。\n]*[。\n]?"
+    message: "严禁使用‘殊不知’剧透式上帝旁白打破沉浸感"
+    suggestion: "保持有限视线，将因果交由后续剧情自然揭露"
+
+  - id: "ZERO_MORALIZER_PHILOSOPHICAL_SIGH"
+    category: "ZERO_MORALIZER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "(?:或许|可能|大概)(?:这就是|这就是所谓的)(?:世界|江湖|人性|命运|现实|社会)[^。\n]*[。\n]?"
+    message: "严禁空洞的散文式感伤与宏观哲学感叹"
+    suggestion: "直接删除感伤句，紧随下一物理动作推进"
+
+  - id: "ZERO_MORALIZER_CLICHE_MAXIM"
+    category: "ZERO_MORALIZER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "(?:命运的齿轮|人生的十字路口|现实往往就是这么残酷|适者生存才是永恒的真理)[^。\n]*[。\n]?"
+    message: "禁止在小说正文中复读陈旧的人生格言"
+    suggestion: "删除该格言，通过人物的选择展现其底层价值观"
+
+  # 2. 典型空洞连接词与翻译腔 (Empty Fillers & Connectors)
+  - id: "FILLER_NOT_ONLY_THAT"
+    category: "EMPTY_FILLER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "不仅如此(?:，|,)"
+    message: "AI典型扩写连接词，生硬且破坏节奏"
+    suggestion: "直接删除或拆分短句"
+
+  - id: "FILLER_WORTH_NOTICING"
+    category: "EMPTY_FILLER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "值得(?:一提|注意)的是(?:，|,)"
+    message: "说明文/论文腔，严重出戏"
+    suggestion: "直接删除，把信息融入人物视线描写"
+
+  - id: "FILLER_IN_SUMMARY"
+    category: "EMPTY_FILLER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "(?:总而言之|言归正传)(?:，|,)"
+    message: "破坏第四面墙的作者总结腔"
+    suggestion: "直接删除"
+
+  - id: "FILLER_NO_DOUBT"
+    category: "EMPTY_FILLER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "(?:毫无疑问|毋庸置疑|不得不说)(?:，|,)"
+    message: "主观判断套话，削弱读者自行感受的悬念"
+    suggestion: "用感官细节替代判定词"
+
+  - id: "FILLER_STIFF_TRANSITION"
+    category: "EMPTY_FILLER"
+    severity: "ERROR"
+    enabled: true
+    pattern: "然而(?:，|,)?就在这时"
+    message: "僵硬的机械转折公式"
+    suggestion: "用直接动作或突发声响切入（如‘突兀间’、‘风声骤厉’）"
+
+  # 3. 泛滥套路神态与死板比喻 (Cardboard Clichés)
+  - id: "CLICHE_EYE_FLASH"
+    category: "CARDBOARD_CLICHE"
+    severity: "WARNING"
+    enabled: true
+    pattern: "眼神中闪过(?:一抹|一丝|少许)?(?:复杂|玩味|戏谑|赞许|冷芒|异色)"
+    message: "AI极高频泛滥的神态公式‘眼神中闪过一丝...’，毫无具体生理信息"
+    suggestion: "改用具体生理反应：瞳孔微缩、眼睑下垂、喉头微动或手指微扣"
+
+  - id: "CLICHE_GASP_AIR"
+    category: "CARDBOARD_CLICHE"
+    severity: "WARNING"
+    enabled: true
+    pattern: "倒吸(?:了)?一口(?:凉气|冷气)"
+    message: "过度透支的震惊模板"
+    suggestion: "改用具象失态动作：手中杯盏倾斜、后退半步、呼吸微窒"
+
+  - id: "CLICHE_MOUTH_CURVE"
+    category: "CARDBOARD_CLICHE"
+    severity: "WARNING"
+    enabled: true
+    pattern: "嘴角(?:微微)?勾起(?:了一抹|一抹)?(?:弧度|冷笑|嘲弄)"
+    message: "刻板机械的装逼神态"
+    suggestion: "改用视线转移、收剑或利落对白直接推进"
+
+  - id: "CLICHE_BROKEN_KITE"
+    category: "CARDBOARD_CLICHE"
+    severity: "WARNING"
+    enabled: true
+    pattern: "宛如断线的风筝(?:般)?"
+    message: "陈腐被击飞比喻"
+    suggestion: "改用骨骼重击声、擦过地面的碎石飞溅等物理打击实感"
