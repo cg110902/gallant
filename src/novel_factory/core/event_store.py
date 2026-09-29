@@ -5,6 +5,8 @@ Event Store - 基于 SQLite 的工业级不可变事件溯源存储引擎
 
 import json
 import sqlite3
+
+from src.novel_factory.core.db import connect as db_connect
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,8 +49,7 @@ class EventStore:
 
     def __init__(self, db_path: Optional[str] = ":memory:"):
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = db_connect(db_path)
         self._init_schema()
 
     def _init_schema(self):

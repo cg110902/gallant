@@ -17,6 +17,8 @@ from enum import Enum
 import json
 from pathlib import Path
 import sqlite3
+
+from src.novel_factory.core.db import connect as db_connect
 from typing import Any, Dict, List, Optional, Sequence
 
 
@@ -142,8 +144,7 @@ class ForeshadowLedger:
     """伏笔全生命周期台账（SQLite 持久化）"""
 
     def __init__(self, db_path: Optional[str] = ":memory:"):
-        self.conn = sqlite3.connect(db_path or ":memory:")
-        self.conn.row_factory = sqlite3.Row
+        self.conn = db_connect(db_path)
         self._init_tables()
 
     def _init_tables(self) -> None:

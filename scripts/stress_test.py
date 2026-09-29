@@ -100,7 +100,7 @@ def build_orchestrator(db_path: str, seed: int) -> NovelFactoryOrchestrator:
     )
     orch.contract_auditor.enforce_camera_coverage = False
 
-    # 注册角色
+    # 注册角色（经统一入口，同步写入图谱与事件库）
     for i, name in enumerate(WHO):
         orch.register_entity(f"char_{i}", "CHARACTER", name, created_chapter=1,
                              initial_payload={"power_rating": 100.0})
@@ -201,6 +201,26 @@ def run(chapters: int, workdir: Path, crash_at: int | None, seed: int) -> int:
 
     summary = producer.run(all_chapters, lambda c: plan_for(orch, c))
     elapsed = time.time() - t0
+
+    # ---- 数据完整性抽查（这些曾经都是真实事故）----
+    print("\n===== 数据完整性抽查 =====")
+    log = orch.repo.get_commit_log(limit=chapters + 10)
+    chapter_ids = [c["chapter_index"] for c in log]
+    dup = len(chapter_ids) != len(set(chapter_ids))
+    print(f"提交日志章节数 {len(chapter_ids)} | 重复章节: {'有(FAIL)' if dup else '无'}")
+    exported = orch.exporter.get_all_chapters()
+    print(f"导出可见章节数 {len(exported)} | 与日志一致: {len(exported) == len(set(chapter_ids))}")
+
+    mid = max(1, chapters // 2)
+    orch.repo.checkout_chapter(mid)
+    recoverable = len(orch.repo.list_orphaned_commits())
+    print(f"回滚至第 {mid} 章 -> 可恢复的孤立提交 {recoverable} 条（非破坏性回滚）")
+    if recoverable:
+        orch.repo.restore_orphaned_commit(
+            orch.repo.list_orphaned_commits()[-1]["commit_id"]
+        )
+        print("已成功恢复一条被回滚的提交")
+
     cur, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
 
@@ -247,6 +267,11 @@ def run(chapters: int, workdir: Path, crash_at: int | None, seed: int) -> int:
     print(f"SQLite 体积 {db_size:.1f}MB | 单章均 {db_size / max(1, chapters) * 1000:.1f}KB")
 
     orch.close()
+
+    if dup:
+        print("\n[FAIL] 版本库中出现重复章节")
+        orch.close()
+        return 1
 
     failed = summary.failed
     if failed:

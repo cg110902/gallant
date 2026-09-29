@@ -309,6 +309,7 @@ def test_reproducing_a_chapter_is_idempotent():
     )
     orch.contract_auditor.enforce_word_count = False
     orch.contract_auditor.enforce_camera_coverage = False
+    orch.register_entity("char_a", "CHARACTER", "零号", created_chapter=1)
 
     delta = StateDelta(chapter_index=1, entity_mutations={"char_a": {"power_rating": 200.0}})
     orch.produce_chapter(1, "第一章", [_beat()], [], delta)

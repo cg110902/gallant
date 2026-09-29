@@ -62,7 +62,8 @@ def test_all_documented_commands_are_registered():
     parser = build_parser()
     actions = [a for a in parser._actions if a.dest == "command"]
     registered = set(actions[0].choices.keys())
-    expected = {"demo", "produce", "status", "rollback", "export", "inspect", "govern", "resume"}
+    expected = {"demo", "produce", "status", "rollback", "export", "inspect",
+                "govern", "resume", "workbench", "outline"}
     assert expected == registered
 
 

@@ -137,3 +137,55 @@ def test_subagent_definitions_exist():
         content = f.read_text(encoding="utf-8")
         assert content.startswith("---")
         assert f"name: {name}" in content
+
+
+def test_hitl_config_is_applied(tmp_path: Path):
+    cfg = _write_project(tmp_path, {
+        "hitl": {
+            "enable": False,
+            "patch_exhaustion_threshold": 7,
+            "state_file": str(tmp_path / "custom_hitl.json"),
+        }
+    })
+    orch = NovelFactoryOrchestrator(project_config_path=cfg, db_path=":memory:")
+    assert orch.enable_hitl is False
+    assert orch.hitl_patch_exhaustion_threshold == 7
+    assert orch.hitl_manager.state_file == tmp_path / "custom_hitl.json"
+    orch.close()
+
+
+def test_llm_gateway_config_is_applied(tmp_path: Path):
+    from src.novel_factory.llm.client import MockLLMProvider
+
+    cfg = _write_project(tmp_path, {
+        "llm_gateway": {
+            "max_retries": 9, "retry_base_delay": 0.25,
+            "circuit_failure_threshold": 2, "circuit_recovery_timeout": 5.0,
+        }
+    })
+    orch = NovelFactoryOrchestrator(
+        project_config_path=cfg, db_path=":memory:", llm_provider=MockLLMProvider()
+    )
+    gw = orch.llm_gateway
+    assert gw is not None
+    assert gw.config.max_retries == 9
+    assert gw.config.retry_base_delay == 0.25
+    assert gw.config.circuit_failure_threshold == 2
+    orch.close()
+
+
+def test_no_gateway_when_using_plain_callable(tmp_path: Path):
+    """纯 callable 模式下不应凭空造出网关"""
+    cfg = _write_project(tmp_path, {})
+    orch = NovelFactoryOrchestrator(
+        project_config_path=cfg, db_path=":memory:", llm_worker=lambda s, u: "x"
+    )
+    assert orch.llm_gateway is None
+    orch.close()
+
+
+def test_shipped_project_yaml_declares_new_sections():
+    root = Path(__file__).resolve().parent.parent
+    raw = yaml.safe_load((root / "project.yaml").read_text(encoding="utf-8"))
+    for key in ("contract_audit", "governance", "runtime", "llm_gateway", "hitl", "outline"):
+        assert key in raw, f"project.yaml 缺少 {key} 配置段"

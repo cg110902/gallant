@@ -19,6 +19,7 @@ Novel Factory Orchestrator - 工业级全链路总编排中枢 (16-Phase Unified
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import socket
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import yaml
 
@@ -28,6 +29,8 @@ from src.novel_factory.codex.codex_assembler import CodexAssembler
 from src.novel_factory.codex.progression_engine import ProgressionDelta, ProgressionEngine, ProgressionType
 from src.novel_factory.codex.recursive_compiler import CodexEntry, RecursiveCodexCompiler
 from src.novel_factory.controller.doc_outliner import DOCOutliner
+from src.novel_factory.controller.outline_store import OutlineStore, OutlineValidationReport
+from src.novel_factory.core.db import ConcurrentProductionError, ProductionLock
 from src.novel_factory.core.event_store import EventStore, WorldSnapshot
 from src.novel_factory.core.events import Event, EventType
 from src.novel_factory.export.manuscript_exporter import ManuscriptExporter
@@ -45,20 +48,30 @@ from src.novel_factory.config.schemas import ProjectConfig
 from src.novel_factory.graph.causal_dag import CausalDAG
 from src.novel_factory.graph.invariant_checker import InvariantChecker, InvariantReport, InvariantViolation, ProposedAction
 from src.novel_factory.llm.client import BaseLLMProvider, MockLLMProvider, get_llm_provider
-from src.novel_factory.llm.cost_auditor import ChapterCostSummary, CostAuditor, FinancialCircuitBreakerError
+from src.novel_factory.llm.cost_auditor import (
+    ChapterCostSummary,
+    CostAuditor,
+    FinancialAlertLevel,
+    FinancialCircuitBreakerError,
+)
 from src.novel_factory.llm.client import LLMGenerationResult
 from src.novel_factory.llm.cost_tracker import CostTracker
+from src.novel_factory.llm.gateway import GatewayConfig, ModelGateway
 from src.novel_factory.pipeline.beat_renderer import BeatRenderer
 from src.novel_factory.pipeline.local_patcher import ChapterBeatSegment, LocalPatcher, PatchResult
 from src.novel_factory.pipeline.stream_monitor import StreamMonitor
 from src.novel_factory.qc.llm_judge import JudgeEvaluation, LLMJudge
 from src.novel_factory.qc.compliance_scanner import ComplianceReport, ComplianceScanner
-from src.novel_factory.qc.contract_auditor import BeatContractAuditor, ContractAuditReport
+from src.novel_factory.qc.contract_auditor import (
+    BeatContractAuditor,
+    ContractAuditReport,
+    ContractBreachSeverity,
+)
 from src.novel_factory.qc.mechanical_linter import LintReport, MechanicalLinter
 from src.novel_factory.qc.repetition_detector import RepetitionAnalysisReport, RepetitionDetector
 from src.novel_factory.qc.simhash_dedup import CrossChapterDedupIndex, DuplicateIncident, DynamicFatigueMatrix, SimHashDeduplicator
 from src.novel_factory.qc.trope_cooldown import TropeCooldownTracker
-from src.novel_factory.schemas.beat import BeatContract, BeatOutput
+from src.novel_factory.schemas.beat import BeatContract, BeatOutput, MicroEvent
 from src.novel_factory.schemas.commit import StateDelta, StoryCommit
 from src.novel_factory.schemas.entity import LoreEntry
 from src.novel_factory.vcs.repository import NarrativeRepository
@@ -162,8 +175,20 @@ class NovelFactoryOrchestrator:
         max_cost_per_chapter: float = 0.40,
         strict_unregistered_entities: bool = True,
         max_simhash_incidents_per_chapter: int = 0,
-        enforce_governance: bool = True
+        enforce_governance: bool = True,
+        enable_hitl: bool = True,
+        hitl_patch_exhaustion_threshold: int = 3,
+        escalate_ambiguity_to_judge: bool = True,
+        judge_provider: Optional[BaseLLMProvider] = None,
+        acquire_write_lock: bool = False,
+        force_write_lock: bool = False
     ):
+        # 机械判定的灰色地带升级给语义裁判复核
+        self.escalate_ambiguity_to_judge = escalate_ambiguity_to_judge
+        self.judge_provider = judge_provider
+        # HITL：机器修不动时挂起等待人工，而不是硬产
+        self.enable_hitl = enable_hitl
+        self.hitl_patch_exhaustion_threshold = hitl_patch_exhaustion_threshold
         # 长程治理闸门（伏笔超期/时间线矛盾/人设崩坏/钩子失效 是否否决整章）
         self.enforce_governance = enforce_governance
         # 严格模式：正文中出现未在 BEC 图谱注册的角色即判定违规（防幽灵串场绕过不变量）
@@ -203,6 +228,7 @@ class NovelFactoryOrchestrator:
 
         # 4. 细粒度规划与装配
         self.doc_outliner = DOCOutliner()
+        self.outline_store = OutlineStore(self.doc_outliner)
         self.codex_assembler = CodexAssembler(max_token_budget=3500)
         self.recursive_compiler = RecursiveCodexCompiler(token_budget=3500)
         self.trope_tracker = TropeCooldownTracker()
@@ -295,7 +321,14 @@ class NovelFactoryOrchestrator:
             patcher=self.patcher,
             judge=self.llm_judge
         )
-        self.hitl_manager = HITLBreakpointManager()
+        hitl_cfg = self.config.get("hitl", {}) or {}
+        if "enable" in hitl_cfg:
+            self.enable_hitl = bool(hitl_cfg["enable"])
+        if "patch_exhaustion_threshold" in hitl_cfg:
+            self.hitl_patch_exhaustion_threshold = int(hitl_cfg["patch_exhaustion_threshold"])
+        self.hitl_manager = HITLBreakpointManager(
+            state_file_path=Path(hitl_cfg.get("state_file", ".hitl_state.json"))
+        )
 
         # 8.5 长程一致性层 (P1)：伏笔台账 / 故事日历 / 人设指纹 / 命名冲突
         self.foreshadow_ledger = ForeshadowLedger(db_path=db_path)
@@ -311,13 +344,39 @@ class NovelFactoryOrchestrator:
         self.power_guard = PowerCurveGuard()
         self.thread_scheduler = ThreadScheduler()
 
+        # 8.9 生产写锁：并发写同一部作品会让章节从版本链上静默脱落
+        self.production_lock: Optional[ProductionLock] = None
+        if acquire_write_lock and db_path and db_path != ":memory:":
+            self.production_lock = ProductionLock(
+                conn=self.repo.conn,
+                owner=f"{socket.gethostname()}:{Path(db_path).name}",
+            )
+            self.production_lock.acquire(force=force_write_lock)
+
         # 9. 全渠道导出器
         self.exporter = ManuscriptExporter(repo=self.repo, graph=self.graph)
 
         # 10. LLM 生成调用钩子
         #     优先使用真实 Provider（可回传真实 token 用量用于财务审计）；
         #     否则退化为纯文本 callable，token 数按字符估算。
+        # 真实 Provider 一律经由 ModelGateway 包装，获得【节拍级】的
+        # 指数退避重试与熔断能力。若把重试只放在章级（ResumableProducer），
+        # 一次瞬时 429 会导致整章重产，已经写好的节拍要重新付费。
         self.llm_provider: Optional[BaseLLMProvider] = llm_provider
+        self.llm_gateway: Optional[ModelGateway] = None
+        if llm_provider is not None:
+            gw_cfg = self.config.get("llm_gateway", {}) or {}
+            self.llm_gateway = ModelGateway(
+                config=GatewayConfig(
+                    max_retries=gw_cfg.get("max_retries", 3),
+                    retry_base_delay=gw_cfg.get("retry_base_delay", 1.0),
+                    circuit_failure_threshold=gw_cfg.get("circuit_failure_threshold", 4),
+                    circuit_recovery_timeout=gw_cfg.get("circuit_recovery_timeout", 30.0),
+                    temperature=self.generation_temperature,
+                    max_tokens=self.generation_max_tokens,
+                ),
+                provider=llm_provider,
+            )
         self._last_usage: Optional[LLMGenerationResult] = None
         if llm_worker is not None:
             self.llm_worker = llm_worker
@@ -341,8 +400,9 @@ class NovelFactoryOrchestrator:
         )
 
     def _provider_worker(self, system_prompt: str, user_prompt: str) -> str:
-        """通过真实 LLM Provider 生成，并缓存本次调用的真实 token 用量"""
-        result = self.llm_provider.generate(
+        """经网关（重试 + 熔断）调用真实 Provider，并缓存真实 token 用量"""
+        caller = self.llm_gateway or self.llm_provider
+        result = caller.generate(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=self.generation_temperature,
@@ -418,6 +478,60 @@ class NovelFactoryOrchestrator:
             }
         ), idempotent=True)
 
+    def _recursive_select_lore(
+        self,
+        lore_entries: List[LoreEntry],
+        chapter_index: int,
+        scene_beat: BeatContract,
+        recent_text: str,
+    ) -> List[LoreEntry]:
+        """
+        以递归级联逻辑筛选本节拍真正需要注入的设定词条。
+
+        先按时序有效期过滤，再交给 RecursiveCodexCompiler 做多层激活扫描
+        （被激活词条的正文会参与下一层扫描，从而带出链式依赖的设定）。
+        """
+        valid = [e for e in lore_entries if e.is_valid_at(chapter_index)]
+        if not valid:
+            return []
+
+        codex_entries = [
+            CodexEntry(
+                entry_id=e.entry_id,
+                name=e.name,
+                content=e.content,
+                constant=e.is_global,
+                primary_keys=list(e.primary_keys) + list(e.aliases) + [e.name],
+                secondary_keys=list(e.secondary_keys),
+                insertion_order=0 if e.is_global else 100,
+            )
+            for e in valid
+        ]
+
+        corpus = "\n".join([
+            recent_text[-1500:],
+            scene_beat.scene_atmosphere,
+            " ".join(scene_beat.characters_present),
+            scene_beat.location_id,
+            " ".join(ev.description for ev in scene_beat.micro_events),
+            " ".join(scene_beat.pre_conditions),
+            " ".join(scene_beat.post_conditions),
+        ])
+
+        try:
+            compiled = self.recursive_compiler.compile(
+                base_corpus=corpus, codex_entries=codex_entries
+            )
+        except Exception:
+            return valid  # 级联失败不应阻断生产，退化为全量注入
+
+        activated_ids = {
+            e.entry_id for e in (compiled.constant_entries + compiled.activated_entries)
+        }
+        selected = [e for e in valid if e.entry_id in activated_ids]
+        # 一条都没命中时保留全局常驻词条，避免上下文彻底失去世界观基线
+        return selected or [e for e in valid if e.is_global]
+
     def _known_character_names(self) -> Dict[str, str]:
         """读取图谱中全部角色实体的 id->名字 映射，供在场纪律检查使用"""
         try:
@@ -454,6 +568,20 @@ class NovelFactoryOrchestrator:
         # 支线调度：该续更哪条线
         thread_rep = self.thread_scheduler.check(max(1, chapter_index - 1))
         directives.extend(thread_rep.directives)
+
+        # 套路冷却：处于冷却期的桥段本章禁用，并给出反转写法
+        for trope_id, defn in self.trope_tracker.tropes.items():
+            available, remaining, inversions = self.trope_tracker.check_availability(
+                trope_id, current_chapter=chapter_index
+            )
+            if not available:
+                hint = (
+                    f"【套路冷却】「{defn.name}」在最近章节刚用过（还需冷却 {remaining} 章），"
+                    f"本章禁止重复使用。"
+                )
+                if inversions:
+                    hint += "若剧情确需该桥段，请改用反转写法：" + "；".join(inversions[:2])
+                directives.append(hint)
 
         return directives
 
@@ -509,7 +637,26 @@ class NovelFactoryOrchestrator:
         # 8. 多线调度
         report.threads = self.thread_scheduler.check(chapter_index)
 
+        # 9. 套路使用自动登记（供后续章节冷却判定）
+        for trope_id in self.detect_tropes_in_text(chapter_text):
+            self.trope_tracker.record_trope_use(trope_id, chapter_index)
+
         return report
+
+    # 套路识别特征词：命中任意两个即认定该桥段被使用
+    TROPE_SIGNATURES: Dict[str, List[str]] = {
+        "AUCTION_HEIST": ["拍卖", "竞价", "起拍", "落槌", "叫价", "包厢"],
+        "FOREST_AMBUSH": ["密林", "埋伏", "截道", "山道", "劫杀", "荒野"],
+        "BETRAYAL_FRAME": ["构陷", "诬告", "同门", "宗门", "问责", "栽赃"],
+    }
+
+    def detect_tropes_in_text(self, text: str) -> List[str]:
+        """从正文中识别本章实际使用了哪些常见桥段"""
+        used: List[str] = []
+        for trope_id, sigs in self.TROPE_SIGNATURES.items():
+            if sum(1 for s in sigs if s in text) >= 2:
+                used.append(trope_id)
+        return used
 
     def produce_beat(
         self,
@@ -531,6 +678,16 @@ class NovelFactoryOrchestrator:
         7. 财务精确入账
         """
         feedback_history: List[str] = []
+
+        # 0. 契约自身合法性前置校验：契约写错了就别花钱生成了
+        snapshot_for_validation = self.event_store.materialize_world_at(chapter_index)
+        contract_errors = self.doc_outliner.validate_beat_contract(
+            beat=scene_beat,
+            world_snapshot=snapshot_for_validation,
+            dag=self.causal_dag,
+        )
+        if contract_errors:
+            feedback_history.append("契约前置校验告警: " + "; ".join(contract_errors))
 
         # 1. 因果硬不变式前置断言
         #    注意：必须对【全部】在场角色逐一断言，且绝不因实体未注册而跳过检查，
@@ -582,12 +739,22 @@ class NovelFactoryOrchestrator:
         except FinancialCircuitBreakerError as e:
             feedback_history.append(f"财务预算警报: {e}")
 
-        # 3. 确定性装配上下文
+        # 3. 递归级联检索：先用 SillyTavern 式递归扫描筛出真正该注入的设定词条。
+        #    普通装配只做一层关键词匹配，词条内容里提到的其它词条不会被带出来；
+        #    深度世界观常常是 A 提到 B、B 又依赖 C 的链式结构。
+        active_lore = self._recursive_select_lore(
+            lore_entries=lore_entries,
+            chapter_index=chapter_index,
+            scene_beat=scene_beat,
+            recent_text=preceding_text_buffer,
+        )
+
+        # 4. 确定性装配上下文
         assembled = self.codex_assembler.assemble(
             chapter_index=chapter_index,
             scene_beat=scene_beat,
             graph=self.graph,
-            lore_entries=lore_entries,
+            lore_entries=active_lore,
             recent_text_buffer=preceding_text_buffer
         )
 
@@ -677,14 +844,56 @@ class NovelFactoryOrchestrator:
         if not compliance_report.passed:
             feedback_history.append("过审风控拦截: " + compliance_report.format_summary())
 
-        # 7. 可选 LLM 盲测裁判评估
+        # 7. LLM 语义裁判
+        #    机械规则判不准的灰色地带（MICRO_EVENT_AMBIGUOUS）必须真的交给裁判，
+        #    否则"移交语义复核"只是文档里的一句空话。
         judge_eval: Optional[JudgeEvaluation] = None
-        if enable_llm_judge:
-            judge_eval = self.llm_judge.evaluate_beat(
-                beat=scene_beat,
-                prose=current_prose,
-                provider=MockLLMProvider()
-            )
+        has_ambiguity = any(
+            b.clause == "MICRO_EVENT_AMBIGUOUS" for b in contract_report.breaches
+        )
+        # 没有配置可用的裁判时不做升级：一个不存在的裁判不该把"存疑"
+        # 变成"确定违约"——那会让缺失裁判反而比没有裁判更糟。
+        judge_provider = self.judge_provider or self.llm_provider
+        need_judge = (
+            (enable_llm_judge or (self.escalate_ambiguity_to_judge and has_ambiguity))
+            and judge_provider is not None
+        )
+        if need_judge:
+            try:
+                judge_eval = self.llm_judge.evaluate_beat(
+                    beat=scene_beat,
+                    prose=current_prose,
+                    provider=judge_provider
+                )
+            except Exception as e:
+                feedback_history.append(f"语义裁判调用失败(不阻断): {type(e).__name__}: {e}")
+
+            if judge_eval is not None and not judge_eval.verdict_available:
+                # 裁判没能给出可用裁决 -> 维持机械层的"存疑"结论（非阻断）
+                feedback_history.append(
+                    "语义裁判未能给出可用裁决，维持存疑（不升级为违约）"
+                )
+            elif judge_eval is not None and has_ambiguity:
+                if judge_eval.passed:
+                    # 裁判认定语义上确已推进 -> 撤销机械层的存疑判定
+                    contract_report.breaches = [
+                        b for b in contract_report.breaches
+                        if b.clause != "MICRO_EVENT_AMBIGUOUS"
+                    ]
+                    contract_report.passed = not (
+                        contract_report.fatal_breaches or contract_report.major_breaches
+                    )
+                    feedback_history.append("语义裁判判定微事件确已推进，存疑项已撤销")
+                else:
+                    # 裁判确认漏写 -> 存疑升级为严重违约
+                    for b in contract_report.breaches:
+                        if b.clause == "MICRO_EVENT_AMBIGUOUS":
+                            b.severity = ContractBreachSeverity.MAJOR
+                            b.message += "（语义裁判复核：确未推进）"
+                    contract_report.passed = False
+                    feedback_history.append(
+                        "语义裁判判定微事件未推进: " + (judge_eval.critique or "")[:120]
+                    )
 
         # 8. 财务精确入账：有真实 Provider 回传用量时以真实值为准，否则按字符估算
         if self._last_usage is not None:
@@ -843,6 +1052,15 @@ class NovelFactoryOrchestrator:
 
         chapter_qc_passed = not chapter_blockers
 
+        # ===== HITL 人机断点 =====
+        # 机器无法自行解决的情况必须交还给人，而不是硬着头皮往下产。
+        self._maybe_trigger_breakpoint(
+            chapter_index=chapter_index,
+            blockers=chapter_blockers,
+            beat_results=beat_results,
+            cost_summary=cost_summary,
+        )
+
         # 原子提交至 Narrative VCS (会自动同步驱动 BECGraph, EventStore 与 ProgressionEngine 回滚/推进)
         commit = self.repo.commit_chapter(
             chapter_index=chapter_index,
@@ -897,6 +1115,10 @@ class NovelFactoryOrchestrator:
         # 定期保存 EventStore 快照检查点
         self.event_store.save_checkpoint(chapter_index)
 
+        # 长跑期间续约写锁，避免被误判为残留锁
+        if self.production_lock is not None:
+            self.production_lock.heartbeat()
+
         return ChapterProductionResult(
             chapter_index=chapter_index,
             title=title,
@@ -912,5 +1134,237 @@ class NovelFactoryOrchestrator:
             governance=governance
         )
 
+    # ================= Antigravity 智能体接口 =================
+
+    def prepare_subagent_task(
+        self,
+        role: str,
+        chapter_index: int,
+        scene_beat: Optional[BeatContract] = None,
+        chapter_goal: str = "",
+        lore_entries: Optional[List[LoreEntry]] = None,
+    ) -> Any:
+        """
+        为 Antigravity 子智能体（novel_director / novel_writer）编排任务载荷。
+
+        这是把本流水线接入外部智能体运行时的公开入口：由运行时负责实际调用模型，
+        质检与治理仍由本编排器承担。
+        """
+        role_key = role.lower()
+        if role_key in ("director", "novel_director"):
+            snapshot = self.event_store.materialize_world_at(chapter_index)
+            characters = [
+                e.get("name", eid) for eid, e in snapshot.entities.items()
+                if e.get("is_alive", True)
+            ]
+            goal = chapter_goal
+            if not goal:
+                plan = self.outline_store.chapter_plan(chapter_index)
+                goal = plan["core_conflict"] if plan else ""
+            return self.subagent_bus.prepare_director_task(
+                chapter_index=chapter_index,
+                chapter_goal=goal,
+                active_characters=characters,
+            )
+
+        if role_key in ("writer", "novel_writer"):
+            if scene_beat is None:
+                raise ValueError("为 writer 准备任务时必须提供 scene_beat")
+            assembled = self.codex_assembler.assemble(
+                chapter_index=chapter_index,
+                scene_beat=scene_beat,
+                graph=self.graph,
+                lore_entries=self._recursive_select_lore(
+                    lore_entries or [], chapter_index, scene_beat, ""
+                ),
+                recent_text_buffer="",
+            )
+            return self.subagent_bus.prepare_writer_task(
+                scene_beat, assembled.raw_full_context
+            )
+
+        raise ValueError(f"未知的子智能体角色: {role}")
+
+    # ================= 大纲驱动 =================
+
+    def load_outline(
+        self, path: Union[str, Path], bootstrap: bool = False
+    ) -> OutlineValidationReport:
+        """
+        加载全书大纲并立即校验层级完整性。
+
+        bootstrap=True 时同时把演员表灌入世界图谱——否则大纲里写的角色
+        在图谱中并不存在，每一章都会被"未注册实体"拦死。
+        """
+        self.doc_outliner = self.outline_store.load(path)
+        if bootstrap:
+            self.outline_store.bootstrap_world(self)
+        return self.outline_store.validate()
+
+    def bootstrap_world_from_outline(self) -> int:
+        """把已加载大纲的演员表注册进世界图谱，返回注册实体数"""
+        return self.outline_store.bootstrap_world(self)
+
+    def save_outline(self, path: Union[str, Path]) -> Path:
+        self.outline_store.outliner = self.doc_outliner
+        return self.outline_store.save(path)
+
+    def build_chapter_plan(
+        self,
+        chapter_index: int,
+        fallback_characters: Optional[List[str]] = None,
+        fallback_location: str = "DEFAULT_SCENE",
+        require_outline: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        依据大纲生成本章的生产参数（标题 + 节拍契约）。
+
+        require_outline=True 时，未规划的章节会直接拒绝生产——
+        拿占位内容硬产出来的章节，本质上是在污染版本库。
+        """
+        self.outline_store.outliner = self.doc_outliner
+        plan = self.outline_store.chapter_plan(chapter_index)
+
+        if plan is None:
+            if require_outline:
+                raise ValueError(
+                    f"第 {chapter_index} 章尚未编写大纲，拒绝生产。"
+                    f"请先用 `novel-factory outline` 补全该章规划。"
+                )
+            characters = fallback_characters or []
+            title = f"第 {chapter_index} 章"
+            location = fallback_location
+            conflict = ""
+            hook = ""
+        else:
+            characters = plan["key_characters"] or (fallback_characters or [])
+            title = plan["title"]
+            location = plan["location_id"] or fallback_location
+            conflict = plan["core_conflict"]
+            hook = plan["expected_cliffhanger"]
+
+        beats = self.doc_outliner.auto_decompose_chapter_beats(
+            chapter_index=chapter_index,
+            default_location=location,
+            characters=characters or None,
+        )
+
+        # 把大纲的冲突与钩子注入首尾节拍，让契约真正承载剧情意图
+        if beats and conflict:
+            beats[0].micro_events.append(MicroEvent(
+                event_id=f"ch{chapter_index:04d}_conflict",
+                description=conflict,
+            ))
+        if beats and hook:
+            beats[-1].post_conditions.append(hook)
+
+        return {
+            "title": title,
+            "beat_contracts": beats,
+            "lore_entries": self.outline_store.lore_entries(),
+            "state_delta": StateDelta(chapter_index=chapter_index),
+        }
+
+    def _maybe_trigger_breakpoint(
+        self,
+        chapter_index: int,
+        blockers: List[str],
+        beat_results: List[BeatProductionResult],
+        cost_summary: Optional[ChapterCostSummary],
+    ) -> Optional[BreakpointType]:
+        """
+        判定是否需要挂起等待人工决策，并落盘断点现场。
+
+        触发条件：
+        1. 节拍用尽全部补丁次数仍未过质检（机器已经修不动了）；
+        2. 单章成本进入预警区间（继续跑可能击穿预算）；
+        3. 治理层出现不可自动修复的硬问题（如伏笔超期、时间线矛盾）。
+        """
+        if not self.enable_hitl:
+            return None
+
+        exhausted = [
+            b for b in beat_results
+            if not b.qc_passed and b.patch_count >= self.hitl_patch_exhaustion_threshold
+        ]
+        if exhausted:
+            self.hitl_manager.trigger_breakpoint(
+                b_type=BreakpointType.QC_FAILURE_TAKEOVER,
+                chapter_index=chapter_index,
+                prompt_message=(
+                    f"第 {chapter_index} 章有 {len(exhausted)} 个节拍用尽 "
+                    f"{self.hitl_patch_exhaustion_threshold} 次补丁仍未通过质检，"
+                    f"自动修复已失效，需要人工接管。"
+                ),
+                context_data={
+                    "beat_ids": [b.beat_id for b in exhausted],
+                    "blockers": blockers,
+                    "feedback": [f for b in exhausted for f in b.feedback_history][:20],
+                },
+                beat_id=exhausted[0].beat_id,
+            )
+            return BreakpointType.QC_FAILURE_TAKEOVER
+
+        if cost_summary is not None and cost_summary.alert_level != FinancialAlertLevel.NORMAL:
+            self.hitl_manager.trigger_breakpoint(
+                b_type=BreakpointType.FINANCIAL_LIMIT_ALERT,
+                chapter_index=chapter_index,
+                prompt_message=(
+                    f"第 {chapter_index} 章成本 ¥{cost_summary.total_cost_cny:.4f} "
+                    f"已达 {cost_summary.alert_level.value} 级别，请确认是否追加预算。"
+                ),
+                context_data={"cost": cost_summary.model_dump()},
+            )
+            return BreakpointType.FINANCIAL_LIMIT_ALERT
+
+        return None
+
+    def resolve_breakpoint(
+        self,
+        decision: HumanDecision,
+        modified_data: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        人工决策解除断点。ROLLBACK 决策会真正执行时空回滚，
+        而不只是把状态标记改回去。
+        """
+        state = self.hitl_manager.current_state
+        chapter_index = state.chapter_index
+        result = self.hitl_manager.resolve_breakpoint(decision, modified_data)
+
+        if decision == HumanDecision.ROLLBACK and chapter_index > 1:
+            try:
+                self.repo.checkout_chapter(chapter_index - 1)
+                result["rolled_back_to"] = chapter_index - 1
+            except Exception as e:
+                result["rollback_error"] = str(e)
+        return result
+
+    @property
+    def is_paused(self) -> bool:
+        return self.hitl_manager.current_state.is_paused
+
     def close(self):
-        self.repo.close()
+        """
+        释放全部持有的数据库连接。
+
+        此前只关闭了 repo，导致伏笔台账的连接被泄漏；
+        断点续产会反复创建编排器实例，长跑中必然耗尽文件描述符。
+        """
+        if self.production_lock is not None:
+            self.production_lock.release()
+
+        errors = []
+        for closable in (self.repo, self.foreshadow_ledger):
+            try:
+                closable.close()
+            except Exception as e:  # 单个组件关闭失败不应阻断其余组件
+                errors.append(f"{type(closable).__name__}: {e}")
+        if errors:
+            raise RuntimeError("关闭生产线时部分组件出错: " + "; ".join(errors))
+
+    def __enter__(self) -> "NovelFactoryOrchestrator":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()

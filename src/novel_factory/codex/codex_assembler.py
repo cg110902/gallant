@@ -142,6 +142,15 @@ class CodexAssembler:
             full_context = f"{global_block}\n\n{tracked_block}\n\n{cascaded_block}"
             estimated_tokens = int(len(full_context) / self.chars_per_token)
 
+            # 兜底硬截断：当 global/tracked 两块自身就撑破预算时，
+            # 上面按差值裁剪 cascaded 是不够的，预算会被突破。
+            # Token 预算直接对应真金白银与上下文窗口，必须是硬上限。
+            if estimated_tokens > self.max_token_budget:
+                hard_limit = int(self.max_token_budget * self.chars_per_token)
+                notice = "\n...(上下文超出Token硬预算，已强制截断)"
+                full_context = full_context[:max(0, hard_limit - len(notice))] + notice
+                estimated_tokens = int(len(full_context) / self.chars_per_token)
+
         return AssembledContext(
             chapter_index=chapter_index,
             beat_id=scene_beat.beat_id,

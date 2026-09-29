@@ -181,3 +181,13 @@ def test_adaptive_baseline_still_catches_real_copy():
     incidents = index.check_chapter_duplicate(9, dup, lookback_chapters=15)
     assert len(incidents) >= 1
     assert max(i.similarity for i in incidents) >= 0.95
+
+
+def test_baseline_sample_window_is_bounded():
+    """相似度样本必须有界，且基线只反映近期文风"""
+    index = CrossChapterDedupIndex(min_reliable_length=100, baseline_sample_window=50)
+    text = "他握紧了刀，向前踏出一步。夜色沉下来，远处传来汽笛。" * 10
+    for ch in range(1, 60):
+        index.check_chapter_duplicate(ch, text + str(ch), lookback_chapters=15)
+        index.index_chapter(ch, text + str(ch))
+    assert len(index._similarity_samples) <= 50

@@ -10,6 +10,8 @@ Novel Factory Master CLI - 工业化小说生产车间终端总控台
 6. inspect  : 审查章节的质检指标、SimHash 指纹与词频疲劳矩阵
 7. govern   : 长程治理巡检（伏笔台账 / 爽点曲线 / 支线甘特图 / 升级曲线）
 8. resume   : 查看与操作断点续产日志
+9. workbench: 人机协同断点工作台，查看并解除生产断点
+10. outline : 全书大纲脚手架生成、层级校验与查看
 """
 
 import argparse
@@ -30,8 +32,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from src.novel_factory.cli.workbench import WorkbenchDashboard
+from src.novel_factory.cli.workbench import HITLBreakpointManager, HumanDecision, WorkbenchDashboard
 from src.novel_factory.config.loader import ProjectConfigLoader
+from src.novel_factory.core.db import ConcurrentProductionError
 from src.novel_factory.export.manuscript_exporter import ManuscriptExporter
 from src.novel_factory.orchestrator import NovelFactoryOrchestrator
 from src.novel_factory.runtime.resume import JobStatus, ProductionJournal, ResumableProducer
@@ -58,11 +61,14 @@ def _build_orchestrator(args, db_path: str) -> NovelFactoryOrchestrator:
     project = getattr(args, "project", "project.yaml")
     cfg_path = project if Path(project).exists() else None
 
+    common = dict(
+        enforce_governance=not getattr(args, "no_governance", False),
+        acquire_write_lock=getattr(args, "lock", False),
+        force_write_lock=getattr(args, "force_lock", False),
+    )
     if provider_type == "mock":
         return NovelFactoryOrchestrator(
-            project_config_path=cfg_path,
-            db_path=db_path,
-            enforce_governance=not getattr(args, "no_governance", False),
+            project_config_path=cfg_path, db_path=db_path, **common
         )
     return NovelFactoryOrchestrator.from_provider(
         provider_type=provider_type,
@@ -71,7 +77,7 @@ def _build_orchestrator(args, db_path: str) -> NovelFactoryOrchestrator:
         base_url=getattr(args, "base_url", None),
         config_path=cfg_path,
         db_path=db_path,
-        enforce_governance=not getattr(args, "no_governance", False),
+        **common,
     )
 
 
@@ -255,7 +261,11 @@ def cmd_produce(args):
     """批量自动化生产章节（断点续产）"""
     print_banner()
     db_path = args.db or DEFAULT_DB
-    orchestrator = _build_orchestrator(args, db_path)
+    try:
+        orchestrator = _build_orchestrator(args, db_path)
+    except ConcurrentProductionError as e:
+        console.print(f"[bold red]无法开工：{e}[/bold red]")
+        return
 
     start, end = args.start, args.end
     if end < start:
@@ -270,19 +280,42 @@ def cmd_produce(args):
         f"(供应商={args.provider}, 模型={args.model}, 日志={journal_path})[/bold green]"
     )
 
-    def plan_provider(ch: int) -> Dict[str, Any]:
-        """依据 DOC 大纲控制器自动拆解章节节拍契约"""
-        beats = orchestrator.doc_outliner.auto_decompose_chapter_beats(
-            chapter_index=ch,
-            default_location=args.location,
-            characters=args.characters.split(",") if args.characters else None,
+    outline_path = Path(args.outline)
+    if outline_path.exists():
+        rep = orchestrator.load_outline(outline_path)
+        console.print(f"[cyan]已加载大纲 {outline_path} —— {rep.format_summary().splitlines()[0]}[/cyan]")
+        if not rep.passed and args.require_outline:
+            console.print("[bold red]大纲存在致命问题，拒绝开工。请先修复后重试。[/bold red]")
+            for i in rep.errors[:10]:
+                console.print(f"  [red]- {i.scope} {i.ref}: {i.message}[/red]")
+            orchestrator.close()
+            return
+        registered = orchestrator.outline_store.bootstrap_world(orchestrator)
+        if registered:
+            console.print(f"[cyan]已按演员表注册 {registered} 个世界实体[/cyan]")
+        missing = orchestrator.outline_store.unplanned_chapters(start, end)
+        if missing:
+            msg = f"区间内有 {len(missing)} 章尚未规划大纲: {missing[:10]}"
+            if args.require_outline:
+                console.print(f"[bold red]{msg}，拒绝开工。[/bold red]")
+                orchestrator.close()
+                return
+            console.print(f"[yellow]{msg}（将以占位标题生产）[/yellow]")
+    elif args.require_outline:
+        console.print(
+            f"[bold red]--require-outline 已启用但找不到大纲文件 {outline_path}[/bold red]"
         )
-        return {
-            "title": f"第 {ch} 章",
-            "beat_contracts": beats,
-            "lore_entries": [],
-            "state_delta": StateDelta(chapter_index=ch),
-        }
+        orchestrator.close()
+        return
+
+    def plan_provider(ch: int) -> Dict[str, Any]:
+        """优先按全书大纲生成生产参数，缺失时退化为占位契约"""
+        return orchestrator.build_chapter_plan(
+            chapter_index=ch,
+            fallback_characters=args.characters.split(",") if args.characters else None,
+            fallback_location=args.location,
+            require_outline=args.require_outline,
+        )
 
     def on_progress(ch: int, job):
         color = {
@@ -635,6 +668,145 @@ def cmd_resume(args):
     console.print("\n" + journal.summary().format_summary())
 
 
+# ============================ outline ============================
+
+def cmd_outline(args):
+    """全书大纲：脚手架生成 / 校验 / 查看"""
+    print_banner()
+    from src.novel_factory.controller.outline_store import OutlineStore
+
+    path = Path(args.file)
+    store = OutlineStore()
+
+    if args.init:
+        if path.exists() and not args.force:
+            console.print(f"[bold red]{path} 已存在，如需覆盖请加 --force[/bold red]")
+            return
+        store = OutlineStore.scaffold(
+            title=args.title, total_chapters=args.chapters, volumes=args.volumes
+        )
+        store.save(path)
+        console.print(f"[green]已生成大纲模板: {path}[/green]")
+        console.print("[dim]请编辑该文件填写主线目标、分卷危机与各章冲突，再运行 outline --validate[/dim]")
+        return
+
+    if not path.exists():
+        console.print(
+            f"[bold red]大纲文件不存在: {path}[/bold red]\n"
+            f"[dim]用 `novel-factory outline --init` 生成模板。[/dim]"
+        )
+        return
+
+    store.load(path)
+    report = store.validate()
+
+    o = store.outliner
+    if o.master_arc:
+        console.print(Panel.fit(
+            f"[bold cyan]{o.master_arc.title}[/bold cyan]\n"
+            f"母题: {o.master_arc.core_theme}\n"
+            f"主角终极目标: {o.master_arc.protagonist_ultimate_goal}\n"
+            f"全书规模: {o.master_arc.target_total_chapters} 章",
+            border_style="cyan", title="主线大纲"
+        ))
+
+    if store.cast:
+        ct = Table(title="演员表 (开书注册进世界图谱)", show_header=True, header_style="bold green")
+        ct.add_column("实体 ID"); ct.add_column("名称"); ct.add_column("类型"); ct.add_column("初始属性")
+        for m in store.cast.values():
+            ct.add_row(m.entity_id, m.name, m.entity_type, str(m.payload))
+        console.print(ct)
+
+    if o.volumes:
+        vt = Table(title="分卷规划", show_header=True, header_style="bold magenta")
+        vt.add_column("卷"); vt.add_column("标题"); vt.add_column("章节区间")
+        vt.add_column("核心危机", overflow="fold")
+        for v in sorted(o.volumes.values(), key=lambda x: x.volume_index):
+            vt.add_row(str(v.volume_index), v.title,
+                       f"{v.chapter_start}-{v.chapter_end}", v.core_crisis[:40])
+        console.print(vt)
+
+    if args.show_chapters and o.chapters:
+        ct = Table(title="章节规划", show_header=True)
+        ct.add_column("章"); ct.add_column("标题"); ct.add_column("核心冲突", overflow="fold")
+        ct.add_column("章末钩子", overflow="fold")
+        for idx in sorted(o.chapters):
+            c = o.chapters[idx]
+            ct.add_row(str(idx), c.title, c.core_conflict[:30], c.expected_cliffhanger[:30])
+        console.print(ct)
+
+    # 注意：报告正文里含有 [ERROR] / [WARNING] 这类方括号片段，
+    # 一旦包在 Rich 样式标签里就会被当成标记语法吞掉，必须关闭 markup。
+    console.print(
+        report.format_summary(),
+        style="green" if report.passed else "red",
+        markup=False,
+    )
+
+    gaps = store.unplanned_chapters(1, o.master_arc.target_total_chapters if o.master_arc else 0)
+    if gaps:
+        preview = ", ".join(str(g) for g in gaps[:20])
+        more = f" ...（共 {len(gaps)} 章）" if len(gaps) > 20 else ""
+        console.print(f"[yellow]尚未规划的章节: {preview}{more}[/yellow]")
+
+
+# ============================ workbench ============================
+
+def cmd_workbench(args):
+    """人机协同断点工作台：查看与解除生产断点"""
+    print_banner()
+    manager = HITLBreakpointManager(state_file_path=Path(args.state_file))
+    state = manager.load_state()
+
+    if not state.is_paused:
+        console.print("[green]当前没有待处理的人机断点，流水线处于自动运行状态。[/green]")
+        return
+
+    console.print(Panel.fit(
+        f"[bold yellow]断点类型: {state.active_breakpoint.value if state.active_breakpoint else 'UNKNOWN'}[/bold yellow]\n"
+        f"章节: 第 {state.chapter_index} 章"
+        + (f" | 节拍: {state.beat_id}" if state.beat_id else "") + "\n\n"
+        + state.prompt_message,
+        border_style="yellow", title="等待人工决策"
+    ))
+
+    if state.context_data:
+        t = Table(show_header=True, header_style="bold magenta", title="断点现场")
+        t.add_column("字段"); t.add_column("内容", overflow="fold")
+        for k, v in state.context_data.items():
+            t.add_row(str(k), str(v)[:400])
+        console.print(t)
+
+    if not args.decide:
+        console.print(
+            "\n[dim]使用 --decide {approve|modify|rollback|takeover} 解除断点。[/dim]"
+        )
+        return
+
+    mapping = {
+        "approve": HumanDecision.APPROVE,
+        "modify": HumanDecision.MODIFY_AND_PROCEED,
+        "rollback": HumanDecision.ROLLBACK,
+        "takeover": HumanDecision.MANUAL_TAKEOVER,
+    }
+    decision = mapping[args.decide]
+
+    db_path = args.db or DEFAULT_DB
+    if decision == HumanDecision.ROLLBACK and Path(db_path).exists():
+        orch = NovelFactoryOrchestrator(db_path=db_path)
+        orch.hitl_manager = manager
+        res = orch.resolve_breakpoint(decision)
+        orch.close()
+    else:
+        res = manager.resolve_breakpoint(decision)
+
+    console.print(f"[green]断点已解除: {res}[/green]")
+    console.print(
+        "[dim]如需重跑该章，执行: "
+        f"novel-factory resume --reset {state.chapter_index}[/dim]"
+    )
+
+
 # ============================ parser ============================
 
 def _add_provider_args(p):
@@ -668,6 +840,13 @@ def build_parser() -> argparse.ArgumentParser:
     prod_p.add_argument("--characters", default="", help="在场角色 ID，逗号分隔")
     prod_p.add_argument("--halt-on-reject", action="store_true", help="质检驳回即挂起等待人工")
     prod_p.add_argument("--no-governance", action="store_true", help="关闭长程治理硬闸门")
+    prod_p.add_argument("--outline", default="outline.yaml", help="全书大纲文件")
+    prod_p.add_argument("--no-lock", dest="lock", action="store_false", default=True,
+                        help="不获取生产写锁（不推荐；并发写会导致章节静默丢失）")
+    prod_p.add_argument("--force-lock", action="store_true",
+                        help="强制接管残留的生产写锁")
+    prod_p.add_argument("--require-outline", action="store_true",
+                        help="缺少大纲或大纲不合格时拒绝开工（推荐正式生产开启）")
     _add_provider_args(prod_p)
 
     status_p = sub.add_parser("status", help="查看项目、法则体系与提交树状态")
@@ -695,6 +874,21 @@ def build_parser() -> argparse.ArgumentParser:
     gov_p.add_argument("--db", default=DEFAULT_DB)
     gov_p.add_argument("--window", type=int, default=20, help="巡检窗口章数")
 
+    ol_p = sub.add_parser("outline", help="全书大纲：生成模板 / 校验 / 查看")
+    ol_p.add_argument("--file", default="outline.yaml")
+    ol_p.add_argument("--init", action="store_true", help="生成大纲脚手架模板")
+    ol_p.add_argument("--force", action="store_true", help="覆盖已存在的大纲文件")
+    ol_p.add_argument("--title", default="未命名作品")
+    ol_p.add_argument("--chapters", type=int, default=300, help="全书规划章数")
+    ol_p.add_argument("--volumes", type=int, default=4, help="分卷数")
+    ol_p.add_argument("--show-chapters", action="store_true", help="列出全部章节规划")
+
+    wb_p = sub.add_parser("workbench", help="人机协同断点工作台：查看与解除生产断点")
+    wb_p.add_argument("--state-file", dest="state_file", default=".hitl_state.json")
+    wb_p.add_argument("--db", default=DEFAULT_DB)
+    wb_p.add_argument("--decide", choices=["approve", "modify", "rollback", "takeover"],
+                      default=None, help="做出人工决策并解除断点")
+
     res_p = sub.add_parser("resume", help="查看与操作断点续产日志")
     res_p.add_argument("--journal", default=".production_journal.json")
     res_p.add_argument("--reset", type=int, default=None, help="重置指定章节以便重跑")
@@ -711,6 +905,8 @@ COMMANDS: Dict[str, Callable[[Any], None]] = {
     "inspect": cmd_inspect,
     "govern": cmd_govern,
     "resume": cmd_resume,
+    "workbench": cmd_workbench,
+    "outline": cmd_outline,
 }
 
 

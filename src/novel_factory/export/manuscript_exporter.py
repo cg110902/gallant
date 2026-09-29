@@ -157,17 +157,74 @@ class ManuscriptExporter:
         return dataset_count
 
     def export_world_bible(self, output_file_path: str) -> int:
-        """导出当前世界的全部实体与关系时序图谱总账"""
-        entities = self.graph.conn.execute("SELECT * FROM entities").fetchall()
-        relations = self.graph.conn.execute("SELECT * FROM entity_relations").fetchall()
+        """
+        导出人类可读的世界观设定集 (Markdown)。
 
-        dump = {
-            "entities": [dict(e) for e in entities],
-            "relations": [dict(r) for r in relations]
+        早期实现把原始 JSON 倾倒进 .md 文件，并返回实体数量——
+        既不是设定集，返回值口径也与其它导出器（返回字符数）不一致。
+        """
+        entities = [dict(e) for e in self.graph.conn.execute(
+            "SELECT * FROM entities ORDER BY entity_type, created_chapter"
+        ).fetchall()]
+        relations = [dict(r) for r in self.graph.conn.execute(
+            "SELECT * FROM entity_relations ORDER BY source_id, valid_from_chapter"
+        ).fetchall()]
+
+        by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for e in entities:
+            by_type.setdefault(e.get("entity_type") or "UNKNOWN", []).append(e)
+
+        type_labels = {
+            "CHARACTER": "人物", "ITEM": "物品道具", "LOCATION": "地点",
+            "FACTION": "势力组织", "SYSTEM_RULE": "世界法则", "UNKNOWN": "其它",
         }
 
+        lines: List[str] = [
+            "# 世界观设定集 (World Bible)",
+            "",
+            f"> 自动生成自叙事图谱 | 实体 {len(entities)} 个 | 关系 {len(relations)} 条",
+            "",
+        ]
+
+        for etype, items in by_type.items():
+            lines.append(f"## {type_labels.get(etype, etype)}（{len(items)}）")
+            lines.append("")
+            for e in items:
+                status = "存活" if e.get("is_alive") else "已阵亡"
+                lines.append(f"### {e.get('name') or e.get('entity_id')}")
+                lines.append("")
+                lines.append(f"- **ID**: `{e.get('entity_id')}`")
+                lines.append(f"- **状态**: {status}")
+                lines.append(f"- **首次登场**: 第 {e.get('created_chapter')} 章")
+                try:
+                    payload = json.loads(e.get("current_payload_json") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    payload = {}
+                for k, v in payload.items():
+                    lines.append(f"- **{k}**: {v}")
+
+                owned = [r for r in relations if r.get("source_id") == e.get("entity_id")]
+                if owned:
+                    lines.append("- **关系**:")
+                    for r in owned:
+                        end = r.get("valid_to_chapter")
+                        span = (
+                            f"第{r.get('valid_from_chapter')}章起"
+                            if end is None or end >= 999999
+                            else f"第{r.get('valid_from_chapter')}~{end}章"
+                        )
+                        lines.append(
+                            f"  - {r.get('relation_type')} → `{r.get('target_id')}` ({span})"
+                        )
+                lines.append("")
+
+        if not entities:
+            lines.append("_图谱中尚无任何实体。先注册角色与设定，再导出设定集。_")
+            lines.append("")
+
+        content = "\n".join(lines)
         Path(output_file_path).parent.mkdir(parents=True, exist_ok=True)
         with open(output_file_path, "w", encoding="utf-8") as f:
-            json.dump(dump, f, ensure_ascii=False, indent=2)
+            f.write(content)
 
-        return len(entities)
+        return len(content)

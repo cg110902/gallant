@@ -28,7 +28,15 @@ class ContractValidationError(Exception):
 class DOCOutliner:
     """DOC 细粒度大纲规划与契约控制器"""
 
-    def __init__(self):
+    def __init__(
+        self,
+        min_beat_words: int = 100,
+        max_beat_words: int = 4000
+    ):
+        # 字数合规区间必须与 BeatContract schema 及 pacing 配置保持一致，
+        # 早期硬编码的 [400, 1200] 会把合法的长节拍误判为违规。
+        self.min_beat_words = min_beat_words
+        self.max_beat_words = max_beat_words
         self.master_arc: Optional[MasterArcOutline] = None
         self.volumes: Dict[int, VolumeOutline] = {}
         self.chapters: Dict[int, ChapterOutline] = {}
@@ -150,8 +158,11 @@ class DOCOutliner:
         errors = []
 
         # 1. 字数区间
-        if beat.target_words < 400 or beat.target_words > 1200:
-            errors.append(f"节拍 [{beat.beat_id}] 目标字数 {beat.target_words} 超出工业合规区间 [400, 1200]")
+        if not (self.min_beat_words <= beat.target_words <= self.max_beat_words):
+            errors.append(
+                f"节拍 [{beat.beat_id}] 目标字数 {beat.target_words} 超出合规区间 "
+                f"[{self.min_beat_words}, {self.max_beat_words}]"
+            )
 
         # 2. 在场角色合法性
         if not beat.characters_present:
@@ -201,10 +212,12 @@ class DOCOutliner:
 
     def to_dict(self) -> Dict[str, Any]:
         """全案大纲序列化导出"""
+        # mode="json" 才能把枚举与嵌套模型降为原生标量，
+        # 否则 YAML 序列化会直接抛 RepresenterError。
         return {
-            "master_arc": self.master_arc.model_dump() if self.master_arc else None,
-            "volumes": {k: v.model_dump() for k, v in self.volumes.items()},
-            "chapters": {k: v.model_dump() for k, v in self.chapters.items()}
+            "master_arc": self.master_arc.model_dump(mode="json") if self.master_arc else None,
+            "volumes": {k: v.model_dump(mode="json") for k, v in self.volumes.items()},
+            "chapters": {k: v.model_dump(mode="json") for k, v in self.chapters.items()}
         }
 
     @classmethod

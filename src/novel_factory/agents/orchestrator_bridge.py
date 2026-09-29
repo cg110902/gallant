@@ -131,9 +131,21 @@ class SubagentCoordinationBus:
         max_patch_attempts: int = 2
     ) -> BeatOutput:
         """
-        核心协同环：
-        Writer 生成 -> 机械质检 -> (若违规: Local Patcher 局部微创修补) -> LLM Judge 盲测验收
+        轻量协同环：Writer 生成 -> 机械质检 -> 局部修补 -> LLM 裁判验收。
+
+        ⚠️ 重要：本方法【只做机械文本质检】，不包含契约交付审计、因果不变量、
+        过审风控与长程治理。它仅用于单拍的快速实验与调试。
+
+        正式生产必须走 `NovelFactoryOrchestrator.produce_beat()`，
+        那条路径才有完整的四道闸门。两条路径的质量保证强度不同，
+        不要在生产流程里误用本方法。
         """
+        import warnings
+        warnings.warn(
+            "execute_beat_collaboration_loop 仅做机械质检，缺少契约/不变量/风控/治理闸门；"
+            "正式生产请使用 NovelFactoryOrchestrator.produce_beat()。",
+            stacklevel=2,
+        )
         # 1. 调度 novel_writer 渲染第一稿
         writer_task = self.prepare_writer_task(beat, assembled_context)
         gen_res: LLMGenerationResult = writer_provider.generate(

@@ -32,12 +32,27 @@ description: >-
 
 ---
 
+## 0.5 开书前置：必须先有大纲
+
+```bash
+novel-factory outline --init --title "书名" --chapters 300 --volumes 4
+# 编辑 outline.yaml，重点填三处：
+#   master_arc.protagonist_ultimate_goal  —— 没有目标就没有主线
+#   volumes[].core_crisis                 —— 没有危机卷内必散架
+#   cast[]                                —— 演员表，开书时注册进世界图谱
+novel-factory outline            # 层级校验：占位文案一律判 ERROR
+```
+
+**没有 cast 演员表，大纲里写的角色在图谱中并不存在**，
+每一章都会被「未注册实体」不变量拦死。这是最常见的开局失败原因。
+
 ## 1. 快速巡检
 
 ```bash
 novel-factory status          # 项目配置、战力标尺、提交树、实体花名册
 novel-factory govern          # 长程治理全维度巡检
 novel-factory resume          # 查看断点续产日志
+novel-factory workbench       # 查看待人工决策的生产断点
 ```
 
 ---
@@ -111,7 +126,7 @@ summary = producer.run(range(1, 201), plan_provider=my_plan_fn)
 或直接用 CLI：
 
 ```bash
-novel-factory produce --start 1 --end 200 --provider gemini
+novel-factory produce --start 1 --end 200 --provider gemini --require-outline
 # 崩溃后用完全相同的命令再跑一次即可从断点继续
 novel-factory resume --reset 87    # 人工处理后重置某章重跑
 ```
@@ -120,6 +135,18 @@ novel-factory resume --reset 87    # 人工处理后重置某章重跑
 生产路径上所有事件写入均幂等，重跑同一章不会崩。
 
 ---
+
+## 3.5 机器修不动时：人机断点
+
+节拍用尽补丁次数仍不过质检、或单章成本进入预警区间时，流水线会挂起并落盘现场：
+
+```bash
+novel-factory workbench                     # 查看断点类型、章节、现场数据
+novel-factory workbench --decide approve    # 批准继续
+novel-factory workbench --decide rollback   # 拒绝并真正执行时空回滚
+```
+
+财务类断点**无条件**阻断批次；质检类断点是否阻断，取决于 `--halt-on-reject`。
 
 ## 4. 长程治理巡检
 
@@ -138,7 +165,7 @@ novel-factory govern --window 30
 
 ---
 
-## 5. 时空回滚
+## 5. 时空回滚（非破坏性）
 
 主线跑偏或战力失控时：
 
@@ -147,6 +174,14 @@ novel-factory rollback --chapter 87 --branch fix/power-scale
 ```
 
 BEC 图谱、事件溯源与进展引擎会同步回退到该章末尾状态。
+**被回退的章节不会被删除**，而是标记为孤立提交，可随时恢复：
+
+```python
+orch.repo.list_orphaned_commits()          # 查看可恢复的版本
+orch.repo.restore_orphaned_commit(cid)     # 撤销一次误回滚
+```
+
+切换分支会以提交链为事实来源重建世界状态，不会出现跨分支状态污染。
 
 ---
 
@@ -169,4 +204,7 @@ novel-factory export --format all --output dist/
 - 禁止为了让测试通过而放宽任何闸门；
 - 禁止在 Python 中硬编码题材、战力、节奏或禁语规则（一律进 `configs/` YAML）；
 - 禁止绕过 `ResumableProducer` 做多章生产；
-- 禁止只在图谱注册实体而不同步事件库（用 `orchestrator.register_entity()`）。
+- 禁止只在图谱注册实体而不同步事件库（用 `orchestrator.register_entity()`）；
+- 禁止用 `SubagentCoordinationBus.execute_beat_collaboration_loop()` 做正式生产
+  （它只有机械质检，绕过契约/不变量/风控/治理四道闸门，调用时会告警）；
+- 禁止为没有大纲的章节硬产占位内容。

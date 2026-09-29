@@ -106,7 +106,8 @@ class CrossChapterDedupIndex:
         baseline_margin: float = 0.06,    # 超出基线多少才算异常
         absolute_floor: float = 0.85,     # 无论基线多高，低于此值一律不报
         min_samples_for_baseline: int = 8,
-        warmup_similarity: float = 0.97   # 基线未建立前，只拦近乎逐字复制
+        warmup_similarity: float = 0.97,  # 基线未建立前，只拦近乎逐字复制
+        baseline_sample_window: int = 2000  # 基线只看最近的样本
     ):
         self.min_reliable_length = min_reliable_length
         self.adaptive_baseline = adaptive_baseline
@@ -114,6 +115,7 @@ class CrossChapterDedupIndex:
         self.absolute_floor = absolute_floor
         self.min_samples_for_baseline = min_samples_for_baseline
         self.warmup_similarity = warmup_similarity
+        self.baseline_sample_window = baseline_sample_window
         # 本书章节两两相似度样本，用于推导"正常相似度"基线
         self._similarity_samples: List[float] = []
         self.simhash = deduplicator or SimHashDeduplicator()
@@ -183,6 +185,10 @@ class CrossChapterDedupIndex:
                         f"(相似度 {sim:.1%} >= 判定线 {effective_threshold:.1%}, 汉明距离 {dist})"
                     )
                 ))
+
+        # 基线应反映【近期】文风：全书早期的样本既过时，又会无界增长。
+        if len(self._similarity_samples) > self.baseline_sample_window:
+            self._similarity_samples = self._similarity_samples[-self.baseline_sample_window:]
 
         return incidents
 

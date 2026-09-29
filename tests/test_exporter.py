@@ -117,23 +117,40 @@ def test_export_to_sft_jsonl_dataset(populated_repo):
 
 
 def test_export_world_bible(populated_repo):
-    """测试世界设定集全景导出"""
+    """世界设定集必须是人类可读的 Markdown，而不是 JSON 倾倒"""
     repo, graph = populated_repo
     exporter = ManuscriptExporter(repo=repo, graph=graph)
 
-    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
-        tmp_json = f.name
+    with tempfile.NamedTemporaryFile(suffix=".md", delete=False) as f:
+        tmp_md = f.name
 
     try:
-        ent_count = exporter.export_world_bible(tmp_json)
-        assert ent_count >= 1
+        char_count = exporter.export_world_bible(tmp_md)
+        # 返回值口径与其它导出器一致：字符数
+        assert char_count > 0
 
-        with open(tmp_json, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        assert "entities" in data
-        assert "relations" in data
-        assert any(e["entity_id"] == "char_lin" for e in data["entities"])
+        content = open(tmp_md, "r", encoding="utf-8").read()
+        assert len(content) == char_count
+        assert content.startswith("# 世界观设定集")
+        assert "char_lin" in content
+        # 不得再是裸 JSON
+        with pytest.raises(json.JSONDecodeError):
+            json.loads(content)
     finally:
-        if os.path.exists(tmp_json):
-            os.remove(tmp_json)
+        if os.path.exists(tmp_md):
+            os.remove(tmp_md)
+
+
+def test_export_world_bible_handles_empty_graph(tmp_path):
+    """空图谱不应产出空文件或崩溃"""
+    from src.novel_factory.graph.bec_graph import BECGraph
+    from src.novel_factory.vcs.repository import NarrativeRepository
+
+    g = BECGraph(":memory:")
+    r = NarrativeRepository(db_path=":memory:", graph=g)
+    exporter = ManuscriptExporter(repo=r, graph=g)
+    out = tmp_path / "wb.md"
+    n = exporter.export_world_bible(str(out))
+    assert n > 0
+    assert "尚无任何实体" in out.read_text(encoding="utf-8")
+    r.close()

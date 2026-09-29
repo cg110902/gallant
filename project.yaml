@@ -42,6 +42,20 @@ governance:
   foreshadow_due_soon_window: 10         # 距回收截止多少章开始催收
   hook_min_acceptable_score: 5.0         # 章末钩子合格线
 
+# 3.65 大模型网关：节拍级重试与熔断
+# 只在章级重试是不够的——一次瞬时 429 会导致整章重产，已写好的节拍要重新付费。
+llm_gateway:
+  max_retries: 3
+  retry_base_delay: 1.0
+  circuit_failure_threshold: 4
+  circuit_recovery_timeout: 30.0
+
+# 3.66 人机协同断点：机器修不动时交还给人，而不是硬产
+hitl:
+  enable: true
+  patch_exhaustion_threshold: 3        # 节拍用尽几次补丁仍不过就挂起
+  state_file: ".hitl_state.json"
+
 # 3.7 断点续产运行时
 runtime:
   journal_path: ".production_journal.json"
@@ -49,6 +63,11 @@ runtime:
   retry_backoff_seconds: 2.0
   suspend_on_qc_failure: false           # 质检驳回是否挂起等待人工
   stop_on_financial_breaker: true
+
+# 3.8 全书大纲（主线/分卷/章节/演员表）
+outline:
+  file: "outline.yaml"
+  require_for_production: true           # 未规划的章节拒绝生产，避免污染版本库
 
 # 4. 模型路由与 Prompt 缓存策略
 models:

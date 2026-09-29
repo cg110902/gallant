@@ -21,6 +21,7 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from src.novel_factory.cli.workbench import HumanDecision
 from src.novel_factory.llm.cost_auditor import FinancialCircuitBreakerError
 
 
@@ -263,6 +264,29 @@ class ResumableProducer:
                     )
 
             current = self.journal.get(ch)
+
+            # 编排器触发了人机断点。
+            # 质检类断点是否阻断批次，遵循调用方的 suspend_on_qc_failure 选择；
+            # 财务类断点一律挂起——预算是人的决定，不能由流水线自行越过。
+            if success and getattr(self.orch, "is_paused", False):
+                state = self.orch.hitl_manager.current_state
+                bp = state.active_breakpoint.value if state.active_breakpoint else "?"
+                is_financial = bp == "FINANCIAL_LIMIT_ALERT"
+                if is_financial or self.suspend_on_qc_failure:
+                    self.journal.mark(
+                        ch, status=JobStatus.SUSPENDED,
+                        error=f"HITL 断点 [{bp}]: {state.prompt_message}",
+                    )
+                    current = self.journal.get(ch)
+                else:
+                    # 不阻断，但把断点信息记进日志供事后巡检
+                    job_now = self.journal.get(ch)
+                    self.journal.mark(
+                        ch, blockers=list(job_now.blockers) + [f"HITL[{bp}] {state.prompt_message}"]
+                    )
+                    self.orch.hitl_manager.resolve_breakpoint(HumanDecision.APPROVE)
+                    current = self.journal.get(ch)
+
             if self.progress_callback:
                 self.progress_callback(ch, current)
 

@@ -155,11 +155,21 @@ class CostAuditor:
         self.records.append(rec)
         self._chapter_records[chapter_index].append(rec)
 
-        # 检查是否即时超标
+        # 检查是否即时超标（单章）
         ch_summary = self.audit_chapter(chapter_index)
         if ch_summary.is_budget_exceeded:
             raise FinancialCircuitBreakerError(
                 f"第 {chapter_index} 章累计消耗 ¥{ch_summary.total_cost_cny:.4f} 击穿硬断路器阈值 ¥{self.max_cost_per_chapter:.2f}！"
+            )
+
+        # 全书总预算硬熔断。
+        # 此前只有 pre_check_budget 检查总预算，而真实入账走的是本方法，
+        # 于是全书限额形同虚设——实测限额 ¥0.01 仍能一路花到 ¥156。
+        total_spent = sum(r.calculated_cost_cny for r in self.records)
+        if total_spent > self.max_total_budget:
+            raise FinancialCircuitBreakerError(
+                f"全书财务总预算熔断：累计已消耗 ¥{total_spent:.4f}，"
+                f"超出总投资限额 ¥{self.max_total_budget:.2f}，已停止继续消耗！"
             )
 
         return rec

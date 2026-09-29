@@ -10,6 +10,8 @@ Narrative VCS Repository - 剧情版本控制与时空回滚仓库 (Git-DAG for 
 
 import json
 import sqlite3
+
+from src.novel_factory.core.db import connect as db_connect
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,8 +38,7 @@ class NarrativeRepository:
         progression_engine: Optional[ProgressionEngine] = None
     ):
         self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = db_connect(db_path)
         self.graph = graph or BECGraph(":memory:")
         self.event_store = event_store
         self.progression_engine = progression_engine
@@ -58,8 +59,19 @@ class NarrativeRepository:
                     word_count INTEGER NOT NULL,
                     created_at REAL NOT NULL,
                     state_delta_json TEXT NOT NULL,
-                    qc_metrics_json TEXT DEFAULT '{}'
+                    qc_metrics_json TEXT DEFAULT '{}',
+                    is_orphaned INTEGER NOT NULL DEFAULT 0
                 )
+            """)
+            # 对既有数据库做无损迁移（早期版本没有 is_orphaned 列）
+            cols = {r[1] for r in self.conn.execute("PRAGMA table_info(commits)").fetchall()}
+            if "is_orphaned" not in cols:
+                self.conn.execute(
+                    "ALTER TABLE commits ADD COLUMN is_orphaned INTEGER NOT NULL DEFAULT 0"
+                )
+            self.conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_commits_branch_chapter
+                ON commits (branch_name, chapter_index, is_orphaned)
             """)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS branches (
@@ -94,7 +106,7 @@ class NarrativeRepository:
             return None
 
         c_row = self.conn.execute(
-            "SELECT * FROM commits WHERE commit_id = ?",
+            "SELECT * FROM commits WHERE commit_id = ? AND is_orphaned = 0",
             (b_row["head_commit_id"],)
         ).fetchone()
 
@@ -126,8 +138,20 @@ class NarrativeRepository:
         """
         原子提交一个新章节并同步突变实体图谱
         """
-        head = self.get_head_commit()
-        parent_id = head.commit_id if head else None
+        # 同一章被重新生产时（质检驳回后重跑、人工接管后重写），必须【取代】
+        # 旧版本而不是再追加一条。否则导出的稿件里会出现同一章的多个版本。
+        superseded = self.conn.execute("""
+            SELECT commit_id, parent_commit_id FROM commits
+            WHERE branch_name = ? AND chapter_index = ? AND is_orphaned = 0
+            ORDER BY created_at DESC LIMIT 1
+        """, (self.current_branch, chapter_index)).fetchone()
+
+        if superseded:
+            # 新版本继承被取代版本的父节点，保持祖先链连续
+            parent_id = superseded["parent_commit_id"]
+        else:
+            head = self.get_head_commit()
+            parent_id = head.commit_id if head else None
 
         commit = StoryCommit.create(
             chapter_index=chapter_index,
@@ -139,7 +163,39 @@ class NarrativeRepository:
             qc_metrics=qc_metrics
         )
 
+        # commit_id 由内容哈希导出：内容与父节点完全一致时就是同一个提交，
+        # 重新生产出一模一样的章节应当是幂等无操作，而不是撞唯一约束崩溃。
+        existing = self.conn.execute(
+            "SELECT commit_id FROM commits WHERE commit_id = ?", (commit.commit_id,)
+        ).fetchone()
+        if existing:
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE commits SET is_orphaned = 0 WHERE commit_id = ?",
+                    (commit.commit_id,)
+                )
+                self.conn.execute(
+                    "UPDATE branches SET head_commit_id = ? WHERE branch_name = ? "
+                    "AND (head_commit_id IS NULL OR head_commit_id = ?)",
+                    (commit.commit_id, self.current_branch,
+                     superseded["commit_id"] if superseded else commit.commit_id)
+                )
+            return commit
+
         with self.conn:
+            # 0. 旧版本降级为可恢复的历史版本
+            if superseded:
+                self.conn.execute(
+                    "UPDATE commits SET is_orphaned = 1 WHERE commit_id = ?",
+                    (superseded["commit_id"],)
+                )
+                # 后继章节的父指针改挂到新版本，避免祖先链断裂
+                self.conn.execute(
+                    "UPDATE commits SET parent_commit_id = ? "
+                    "WHERE parent_commit_id = ? AND commit_id != ?",
+                    (commit.commit_id, superseded["commit_id"], commit.commit_id)
+                )
+
             # 1. 存储提交记录
             self.conn.execute("""
                 INSERT INTO commits (
@@ -159,10 +215,25 @@ class NarrativeRepository:
                 json.dumps(qc_metrics or {}, ensure_ascii=False)
             ))
 
-            # 2. 推进当前分支 HEAD 游标
-            self.conn.execute("""
-                UPDATE branches SET head_commit_id = ? WHERE branch_name = ?
-            """, (commit.commit_id, self.current_branch))
+            # 2. 推进 HEAD：仅当新章节确实位于分支末端，或它取代的正是当前 HEAD。
+            #    重产历史中间某一章时，HEAD 不应被拉回到那一章。
+            cur_head = self.conn.execute(
+                "SELECT head_commit_id FROM branches WHERE branch_name = ?",
+                (self.current_branch,)
+            ).fetchone()
+            head_id = cur_head["head_commit_id"] if cur_head else None
+            head_chapter = -1
+            if head_id:
+                hrow = self.conn.execute(
+                    "SELECT chapter_index FROM commits WHERE commit_id = ?", (head_id,)
+                ).fetchone()
+                head_chapter = hrow["chapter_index"] if hrow else -1
+
+            replaces_head = bool(superseded) and head_id == superseded["commit_id"]
+            if replaces_head or chapter_index >= head_chapter:
+                self.conn.execute("""
+                    UPDATE branches SET head_commit_id = ? WHERE branch_name = ?
+                """, (commit.commit_id, self.current_branch))
 
         # 3. 将 state_delta 事实变动同步写入 BECGraph
         for entity_id, mut in state_delta.entity_mutations.items():
@@ -176,20 +247,26 @@ class NarrativeRepository:
 
         return commit
 
-    def checkout_chapter(self, target_chapter_index: int) -> bool:
+    def checkout_chapter(
+        self,
+        target_chapter_index: int,
+        hard: bool = False
+    ) -> bool:
         """
-        一键时空回滚：
-        将当前分支状态精准回滚到第 target_chapter_index 章末尾状态
-        并同步联动物理回滚：
-        1. commits 历史游标回退
-        2. BECGraph 关系与属性回退
-        3. EventStore 不可变事件日志截断
-        4. ProgressionEngine 实体演进增量截断
+        一键时空回滚：将当前分支回滚到第 target_chapter_index 章末尾状态。
+
+        默认为【非破坏性】回滚（等价于 git reset + reflog 保留）：
+        被回退掉的章节标记为 orphaned 而非物理删除，可通过
+        `list_orphaned_commits()` 查看、`restore_orphaned_commit()` 恢复。
+
+        早期实现直接 DELETE 后续提交，一次误操作即永久丢稿；
+        长篇创作中回滚是高频操作，不可逆的回滚是不可接受的。
+
+        hard=True 时才真正物理删除（不可恢复）。
         """
-        # 寻找目标章节对应的 Commit
         row = self.conn.execute("""
             SELECT * FROM commits
-            WHERE branch_name = ? AND chapter_index = ?
+            WHERE branch_name = ? AND chapter_index = ? AND is_orphaned = 0
             ORDER BY created_at DESC LIMIT 1
         """, (self.current_branch, target_chapter_index)).fetchone()
 
@@ -201,41 +278,72 @@ class NarrativeRepository:
         target_commit_id = row["commit_id"]
 
         with self.conn:
-            # 更新分支 HEAD 指针
             self.conn.execute("""
                 UPDATE branches SET head_commit_id = ? WHERE branch_name = ?
             """, (target_commit_id, self.current_branch))
 
-            # 标记目标章节之后的孤立提交
-            self.conn.execute("""
-                DELETE FROM commits
-                WHERE branch_name = ? AND chapter_index > ?
-            """, (self.current_branch, target_chapter_index))
+            if hard:
+                self.conn.execute("""
+                    DELETE FROM commits
+                    WHERE branch_name = ? AND chapter_index > ?
+                """, (self.current_branch, target_chapter_index))
+            else:
+                self.conn.execute("""
+                    UPDATE commits SET is_orphaned = 1
+                    WHERE branch_name = ? AND chapter_index > ? AND is_orphaned = 0
+                """, (self.current_branch, target_chapter_index))
 
-        # 1. 同步回滚 BECGraph (物理删除大于 target_chapter_index 的时序历史)
+        self._materialize_world_to(target_chapter_index)
+        return True
+
+    def list_orphaned_commits(self, branch_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """列出被回滚掉但仍可恢复的提交（reflog 视图）"""
+        branch = branch_name or self.current_branch
+        rows = self.conn.execute("""
+            SELECT commit_id, chapter_index, title, word_count, created_at
+            FROM commits WHERE branch_name = ? AND is_orphaned = 1
+            ORDER BY chapter_index ASC
+        """, (branch,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def restore_orphaned_commit(self, commit_id: str) -> bool:
+        """把被回滚掉的提交重新挂回分支（撤销一次误回滚）"""
+        row = self.conn.execute(
+            "SELECT * FROM commits WHERE commit_id = ? AND is_orphaned = 1", (commit_id,)
+        ).fetchone()
+        if not row:
+            return False
+        with self.conn:
+            self.conn.execute(
+                "UPDATE commits SET is_orphaned = 0 WHERE commit_id = ?", (commit_id,)
+            )
+            self.conn.execute(
+                "UPDATE branches SET head_commit_id = ? WHERE branch_name = ?",
+                (commit_id, row["branch_name"])
+            )
+        self._materialize_world_to(row["chapter_index"])
+        return True
+
+    def _materialize_world_to(self, chapter_index: int) -> None:
+        """把图谱/事件库/演进引擎同步到指定章节末尾状态"""
         with self.graph.conn:
             self.graph.conn.execute(
                 "DELETE FROM entity_progression_history WHERE chapter_index > ?",
-                (target_chapter_index,)
+                (chapter_index,)
             )
             self.graph.conn.execute(
                 "DELETE FROM entity_relations WHERE valid_from_chapter > ?",
-                (target_chapter_index,)
+                (chapter_index,)
             )
             self.graph.conn.execute(
-                "UPDATE entity_relations SET valid_to_chapter = 999999 WHERE valid_to_chapter > ? AND valid_from_chapter <= ?",
-                (target_chapter_index, target_chapter_index)
+                "UPDATE entity_relations SET valid_to_chapter = 999999 "
+                "WHERE valid_to_chapter > ? AND valid_from_chapter <= ?",
+                (chapter_index, chapter_index)
             )
-
-        # 2. 联动回滚 EventStore
         if self.event_store:
-            self.event_store.truncate_after_chapter(target_chapter_index)
-
-        # 3. 联动回滚 ProgressionEngine
+            self.event_store.truncate_after_chapter(chapter_index)
         if self.progression_engine:
-            self.progression_engine.truncate_deltas_after_chapter(target_chapter_index)
-
-        return True
+            self.progression_engine.truncate_deltas_after_chapter(chapter_index)
 
     def create_branch(self, new_branch_name: str) -> None:
         """从当前 HEAD 分叉出全新剧情探索分支"""
@@ -248,8 +356,13 @@ class NarrativeRepository:
             """, (new_branch_name, head_id, time.time()))
         self.current_branch = new_branch_name
 
-    def switch_branch(self, branch_name: str) -> None:
-        """切换工作分支"""
+    def switch_branch(self, branch_name: str, rebuild_world: bool = True) -> None:
+        """
+        切换工作分支，并按目标分支的提交链重建世界状态。
+
+        早期实现只改了一个字符串变量，图谱与事件库仍停留在上一个分支的状态，
+        于是切回 main 之后还能看到 alt 分支的战力数值——跨分支状态污染。
+        """
         b_row = self.conn.execute(
             "SELECT branch_name FROM branches WHERE branch_name = ?",
             (branch_name,)
@@ -257,6 +370,38 @@ class NarrativeRepository:
         if not b_row:
             raise VCSRollbackError(f"目标分支不存在: {branch_name}")
         self.current_branch = branch_name
+        if rebuild_world:
+            self.rebuild_world_from_history(branch_name)
+
+    def rebuild_world_from_history(self, branch_name: Optional[str] = None) -> int:
+        """
+        以提交链为唯一事实来源，重放 state_delta 重建 BEC 图谱状态。
+
+        提交记录是不可变的事实来源，因此任何时候都可以据此确定性地
+        重算世界状态——这比"就地增量修补"要可靠得多。
+        返回重放的提交数。
+        """
+        chain = self.get_commit_history_chain(branch_name or self.current_branch)
+        chain.sort(key=lambda r: r["chapter_index"])
+        head_chapter = chain[-1]["chapter_index"] if chain else 0
+
+        # 先清空该章之后的残留，再从头重放
+        self._materialize_world_to(head_chapter)
+        with self.graph.conn:
+            self.graph.conn.execute("DELETE FROM entity_progression_history")
+            self.graph.conn.execute("DELETE FROM entity_relations")
+
+        for row in chain:
+            delta = StateDelta(**json.loads(row["state_delta_json"]))
+            for entity_id, mut in delta.entity_mutations.items():
+                self.graph.update_entity_progression(
+                    entity_id=entity_id,
+                    chapter_index=row["chapter_index"],
+                    new_payload=mut
+                )
+            for rel in delta.relations_added:
+                self.graph.add_relation(rel)
+        return len(chain)
 
     def list_branches(self) -> List[Dict[str, Any]]:
         """列出所有分支信息"""
@@ -278,16 +423,19 @@ class NarrativeRepository:
                 VALUES (?, ?, ?, ?)
             """, (tag_name, target_id, message, time.time()))
 
-    def get_commit_log(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """获取当前分支提交日志链"""
-        rows = self.conn.execute("""
-            SELECT commit_id, parent_commit_id, chapter_index, title, word_count, created_at
-            FROM commits
-            WHERE branch_name = ?
-            ORDER BY chapter_index ASC LIMIT ?
-        """, (self.current_branch, limit)).fetchall()
+    def get_commit_log(self, limit: int = 20, branch_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        获取分支的提交日志。
 
-        return [dict(r) for r in rows]
+        必须沿 parent_commit_id 祖先链回溯，而不是简单地按 branch_name 过滤：
+        从 main 分叉出的 alt 分支同样"拥有"分叉点之前的全部章节，
+        按 branch_name 过滤会让新分支看起来像是从第 N 章凭空开始。
+        """
+        chain = self.get_commit_history_chain(branch_name or self.current_branch)
+        chain.sort(key=lambda r: r["chapter_index"])
+        keys = ("commit_id", "parent_commit_id", "chapter_index", "title",
+                "word_count", "created_at")
+        return [{k: r[k] for k in keys} for r in chain[:limit]]
 
     def get_commit_history_chain(self, branch_name: str) -> List[Dict[str, Any]]:
         """沿着 parent_commit_id 追溯分支的完整祖先链 (Git-DAG 拓扑)"""
@@ -301,7 +449,9 @@ class NarrativeRepository:
         chain = []
         cur_id = b_row["head_commit_id"]
         while cur_id:
-            row = self.conn.execute("SELECT * FROM commits WHERE commit_id = ?", (cur_id,)).fetchone()
+            row = self.conn.execute(
+                "SELECT * FROM commits WHERE commit_id = ? AND is_orphaned = 0", (cur_id,)
+            ).fetchone()
             if not row:
                 break
             chain.append(dict(row))
