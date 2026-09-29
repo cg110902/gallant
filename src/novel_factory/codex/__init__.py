@@ -11,6 +11,12 @@ from .recursive_compiler import (
     CompiledCodexResult,
     RecursiveCodexCompiler,
 )
+from .progression_engine import (
+    ProgressionEngine,
+    ProgressionDelta,
+    ProgressionType,
+    ProgressionScope,
+)
 
 __all__ = [
     "AssembledContext",
@@ -22,4 +28,8 @@ __all__ = [
     "CodexEntryCategory",
     "CompiledCodexResult",
     "RecursiveCodexCompiler",
+    "ProgressionEngine",
+    "ProgressionDelta",
+    "ProgressionType",
+    "ProgressionScope",
 ]
